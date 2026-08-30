@@ -1,0 +1,16 @@
+{
+  "hosting": {
+    "public": "my website/public",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**",
+      "**/venv/**",
+      "**/.venv/**",
+      "**/__pycache__/**",
+      "**/*.py",
+      "**/*.exe",
+      "**/*.spec"
+    ]
+  }
+}

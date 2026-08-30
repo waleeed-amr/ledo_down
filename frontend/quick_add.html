@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ledo Quick Add</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="quick_add.css">
+</head>
+<body>
+    <div class="quick-add-container">
+        <div class="header-bar">
+            <div class="logo-badge">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="url(#grad1)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <defs><linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#818cf8"/><stop offset="100%" style="stop-color:#c084fc"/></linearGradient></defs>
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span class="logo-text">Ledo</span>
+            </div>
+            <span class="shortcut-hint">Ctrl+Space</span>
+        </div>
+        <div class="input-wrapper">
+            <input type="text" id="url-input" placeholder="Paste a video URL and hit Enter..." autofocus spellcheck="false">
+        </div>
+        <div class="options-row">
+            <div class="quality-pills" id="quality-pills">
+                <button class="pill active" data-value="best" title="Max Quality Video">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                    MAX
+                </button>
+                <button class="pill" data-value="720p">720p</button>
+                <button class="pill" data-value="480p">480p</button>
+                <button class="pill" data-value="360p">360p</button>
+                <button class="pill" data-value="audio" title="Audio Only">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                    MP3
+                </button>
+                <button class="pill" data-value="best" title="Direct File (ZIP, RAR, EXE, etc)">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
+                    FILE
+                </button>
+            </div>
+            <button id="btn-download" class="btn-download">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            </button>
+        </div>
+        <div class="status-bar" id="status-bar" style="display: none;">
+            <div class="status-dot"></div>
+            <span id="status-text">Starting download...</span>
+        </div>
+    </div>
+    <script src="vendor/axios.min.js"></script>
+    <script src="quick_add.js"></script>
+</body>
+</html>

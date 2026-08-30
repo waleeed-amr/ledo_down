@@ -1,0 +1,52 @@
+# --- OS / Editor ---
+Thumbs.db
+.DS_Store
+.idea/
+.vscode/
+
+# --- Logs ---
+*.log
+logs/
+firebase-debug.log
+firebase-debug.*.log
+
+# --- Firebase cache ---
+.firebase/
+
+# --- Node / npm ---
+node_modules/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# --- Build outputs (Electron / mobile / PyInstaller) ---
+build/
+dist/
+out/
+*.spec
+
+# --- Generated / runtime data ---
+downloads.db
+*.sqlite
+*.tmp
+
+# --- Heavy standalone binaries (downloaded tools, not source) ---
+yt-dlp.exe
+ffmpeg.exe
+ffprobe.exe
+aria2c.exe
+instaloader.exe
+deno.exe
+deno.zip
+
+# --- Env / secrets ---
+.env
+.env.local
+.env.*.local
+
+# --- Disabled / backup artifacts (from earlier firebase init) ---
+*.disabled
+*.bak

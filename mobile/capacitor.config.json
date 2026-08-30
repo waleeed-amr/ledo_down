@@ -1,0 +1,21 @@
+{
+  "appId": "com.ledo.downloader",
+  "appName": "Ledo Downloader",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "http",
+    "cleartext": true,
+    "allowNavigation": ["*"]
+  },
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": true,
+    "backgroundColor": "#09090b"
+  },
+  "plugins": {
+    "Browser": {
+      "presentationStyle": "fullscreen"
+    }
+  }
+}

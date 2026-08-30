@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ledo Downloader</title>
+    <style>
+        :root {
+            --bg-color: #0f111a;
+            --surface: #1e1e2e;
+            --primary: #8b5cf6;
+            --primary-hover: #7c3aed;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --success: #10b981;
+            --danger: #ef4444;
+            --border: rgba(255, 255, 255, 0.08);
+        }
+
+        body {
+            width: 320px;
+            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            min-height: 400px;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px;
+            background: linear-gradient(180deg, rgba(30,30,46,1) 0%, rgba(15,17,26,1) 100%);
+            border-bottom: 1px solid var(--border);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .brand h3 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #a78bfa 0%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: var(--danger);
+            box-shadow: 0 0 8px var(--danger);
+            transition: all 0.3s ease;
+        }
+        .status-indicator.online {
+            background-color: var(--success);
+            box-shadow: 0 0 8px var(--success);
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            padding: 0 16px;
+            margin-top: 12px;
+            gap: 4px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-main);
+        }
+
+        .tab-btn.active {
+            color: var(--primary);
+            border-bottom: 2px solid var(--primary);
+        }
+
+        /* Content Area */
+        .content {
+            padding: 16px;
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .tab-pane {
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .tab-pane.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Sniffer List */
+        .media-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .media-item {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .media-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            border-color: rgba(139, 92, 246, 0.3);
+        }
+
+        .media-title {
+            font-size: 13px;
+            font-weight: 500;
+            word-break: break-all;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .media-meta {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .badge {
+            background: rgba(139, 92, 246, 0.15);
+            color: #a78bfa;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        /* Buttons & Forms */
+        button.btn {
+            width: 100%;
+            padding: 10px;
+            background: var(--primary);
+            border: none;
+            border-radius: 6px;
+            color: white;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        button.btn:hover {
+            background: var(--primary-hover);
+        }
+
+        button.btn:disabled {
+            background: var(--surface);
+            color: var(--text-muted);
+            cursor: not-allowed;
+        }
+
+        button.btn-secondary {
+            background: var(--surface);
+            border: 1px solid var(--border);
+        }
+
+        button.btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        input.input-field {
+            width: calc(100% - 24px);
+            padding: 10px 12px;
+            background: rgba(0,0,0,0.2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-main);
+            font-size: 13px;
+            margin-bottom: 12px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        input.input-field:focus {
+            border-color: var(--primary);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 30px 10px;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .empty-state svg {
+            width: 48px;
+            height: 48px;
+            opacity: 0.5;
+            margin-bottom: 10px;
+        }
+
+        .loader {
+            border: 2px solid var(--surface);
+            border-top: 2px solid var(--primary);
+            border-radius: 50%;
+            width: 14px;
+            height: 14px;
+            animation: spin 1s linear infinite;
+            display: none;
+        }
+
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .toast {
+            position: fixed;
+            bottom: 16px;
+            left: 16px;
+            right: 16px;
+            background: var(--success);
+            color: white;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            text-align: center;
+            transform: translateY(150%);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 100;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        }
+        .toast.show {
+            transform: translateY(0);
+        }
+        .toast.error {
+            background: var(--danger);
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <div class="brand">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="url(#grad1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <defs>
+                    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#a78bfa;stop-opacity:1" />
+                        <stop offset="100%" style="stop-color:#3b82f6;stop-opacity:1" />
+                    </linearGradient>
+                </defs>
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <h3>Ledo Downloader</h3>
+        </div>
+        <div class="status-indicator" id="app-status" title="Connecting to Desktop App..."></div>
+    </div>
+
+    <div class="tabs">
+        <button class="tab-btn active" data-target="tab-smart">Smart Detect</button>
+        <button class="tab-btn" data-target="tab-current">Current Tab</button>
+        <button class="tab-btn" data-target="tab-status">Active Tasks</button>
+    </div>
+
+    <div class="content">
+        <!-- Tab 1: Smart Sniffer -->
+        <div id="tab-smart" class="tab-pane active">
+            <div id="sniffer-loader" class="empty-state">
+                <div class="loader" style="display: inline-block; width: 24px; height: 24px; margin-bottom: 10px;"></div>
+                <div>Scanning page for media...</div>
+            </div>
+            <div id="sniffer-empty" class="empty-state" style="display: none;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <div>No media found on this page.</div>
+                <p style="font-size: 11px; margin-top: 8px;">Try playing a video first or use the Current Tab option.</p>
+            </div>
+            <div id="media-list" class="media-list"></div>
+        </div>
+
+        <!-- Tab 2: Current Tab Quick Add -->
+        <div id="tab-current" class="tab-pane">
+            <p style="font-size: 12px; margin-bottom: 12px; color: var(--text-muted);">Send the current page URL to Ledo Desktop App. Perfect for YouTube videos.</p>
+            <input type="text" id="current-url" class="input-field" readonly placeholder="Fetching URL...">
+            <div style="font-size: 11px; margin-bottom: 6px; margin-top: 4px; color: var(--text-muted); font-weight: bold; text-transform: uppercase;">Select Download Quality:</div>
+            <div class="quality-picker" style="display: flex; gap: 6px; flex-wrap: wrap;" id="current-tab-quality-picker">
+                <button class="btn current-quality-btn" data-quality="best" style="flex: 1; padding: 10px 4px; font-size: 12px; min-width: 0; background: linear-gradient(135deg, #7c3aed, #6d28d9);">⚡ MAX</button>
+                <button class="btn current-quality-btn" data-quality="720p" style="flex: 1; padding: 10px 4px; font-size: 12px; min-width: 0; background: var(--surface); border: 1px solid var(--border);">720p</button>
+                <button class="btn current-quality-btn" data-quality="480p" style="flex: 1; padding: 10px 4px; font-size: 12px; min-width: 0; background: var(--surface); border: 1px solid var(--border);">480p</button>
+                <button class="btn current-quality-btn" data-quality="360p" style="flex: 1; padding: 10px 4px; font-size: 12px; min-width: 0; background: var(--surface); border: 1px solid var(--border);">360p</button>
+            </div>
+            <button class="btn current-quality-btn" data-quality="audio" style="margin-top: 10px; padding: 12px; font-size: 13px; background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+                Extract Audio Only (MP3)
+            </button>
+        </div>
+
+        <!-- Tab 3: Active Status -->
+        <div id="tab-status" class="tab-pane">
+            <div id="status-stats" style="display: none;">
+                <div style="background: var(--surface); padding: 15px; border-radius: 8px; border: 1px solid var(--border); text-align: center; margin-bottom: 12px;">
+                    <div style="font-size: 24px; font-weight: bold; color: var(--primary);" id="active-count">0</div>
+                    <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px;">Active Downloads</div>
+                </div>
+                <button class="btn btn-secondary" id="btn-open-app">Open Ledo App</button>
+            </div>
+            <div id="status-offline" class="empty-state">
+                <svg viewBox="0 0 24 24" fill="none" stroke="var(--danger)" stroke-width="1.5">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                    <line x1="12" y1="9" x2="12" y2="13"></line>
+                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                </svg>
+                <div style="color: var(--danger);">App is Offline</div>
+                <p style="font-size: 11px; margin-top: 8px;">Please start Ledo Downloader desktop application.</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast">Action successful!</div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

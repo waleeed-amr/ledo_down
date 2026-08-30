@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ledo Downloader - Premium Edition</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="vendor/toastify.min.css">
+    <link rel="stylesheet" href="vendor/plyr.css" />
+    <link rel="stylesheet" href="vendor/scale.css" />
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">
+                <img src="icon.jpg" alt="Ledo Logo" class="app-icon">
+                <span>Ledo</span>
+            </div>
+            <nav class="nav-menu">
+                <a href="#" class="nav-item active" id="nav-downloads">
+                    <i data-lucide="list-video"></i>
+                    Downloads
+                </a>
+                <a href="#" class="nav-item" id="nav-settings">
+                    <i data-lucide="settings"></i>
+                    Settings
+                </a>
+                <a href="#" class="nav-item" id="nav-stats">
+                    <i data-lucide="bar-chart-2"></i>
+                    Statistics
+                </a>
+                <!-- Theme Toggle -->
+                <div style="flex: 1;"></div>
+                <a href="#" class="nav-item" id="btn-theme-toggle" title="Toggle Theme">
+                    <i data-lucide="moon"></i>
+                    Theme
+                </a>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Downloads View -->
+            <div id="view-downloads" class="view-section active">
+                <header class="top-bar">
+                    <div class="add-download">
+                        <div class="input-wrapper" style="flex: 1; position: relative;">
+                            <input type="text" id="url-input" placeholder="Paste URL (YouTube, files, anything)">
+                            <textarea id="url-batch-input" placeholder="Paste multiple URLs here (one per line)..." style="display: none; height: 100px; resize: vertical; width: 100%; border-radius: 8px; border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-main); font-size: 14px; padding: 12px 16px; outline: none;"></textarea>
+                        </div>
+                        <button id="btn-toggle-batch" class="btn-icon" title="Toggle Batch Mode">
+                            <i data-lucide="layers"></i>
+                        </button>
+                        <select id="batch-quality-select" class="sort-select" style="display: none; min-width: 130px;" title="Quality for batch downloads">
+                            <option value="best">🎬 Video (Max)</option>
+                            <option value="720p">📺 Video (720p)</option>
+                            <option value="480p">📱 Video (480p)</option>
+                            <option value="360p">📟 Video (360p)</option>
+                            <option value="audio">🎵 Audio (MP3)</option>
+                        </select>
+                        <button id="btn-select-folder" class="btn-icon" title="Choose Save Location (this download only)">
+                            <i data-lucide="folder-open"></i>
+                        </button>
+                        <button id="btn-fetch-info" class="btn-primary">
+                            <i data-lucide="download-cloud"></i>
+                            <span id="btn-fetch-text">Fetch</span>
+                        </button>
+                    </div>
+                    <div id="selected-path-display" style="color: var(--text-muted); font-size: 13px; margin-top: 10px; display: none;">Saving to: <span id="active-save-path" style="color: var(--accent-primary); font-weight: 600;"></span></div>
+                    
+                    <!-- Advanced Filter & Sort Bar -->
+                    <div class="filter-sort-bar" style="display: flex; gap: 12px; margin-top: 16px; align-items: center;">
+                        <button class="filter-btn active" data-filter="all">All</button>
+                        <button class="filter-btn" data-filter="downloading">Active</button>
+                        <button class="filter-btn" data-filter="completed">Completed</button>
+                        <button class="filter-btn" data-filter="error">Errors</button>
+                        <div style="flex: 1;"></div>
+                        <select id="sort-select" class="sort-select">
+                            <option value="date-desc">Newest First</option>
+                            <option value="size-desc">Largest Size</option>
+                            <option value="speed-desc">Fastest Speed</option>
+                            <option value="name-asc">Name (A-Z)</option>
+                        </select>
+                    </div>
+                </header>
+
+                <!-- Quality Selection Modal -->
+                <div id="quality-modal" class="modal-overlay" style="display: none;">
+                    <div class="modal-content">
+                        <h3 id="modal-title">Select Quality</h3>
+                        <div id="quality-options" class="quality-options">
+                            <!-- Options injected by JS -->
+                        </div>
+                        <div id="schedule-picker-container" style="display: none; margin-bottom: 16px;">
+                            <label style="font-size: 13px; color: var(--text-muted);">Select time to start:</label>
+                            <input type="datetime-local" id="schedule-time" style="width: 100%; padding: 8px; border-radius: 6px; background: var(--bg-dark); color: white; border: 1px solid var(--border-color); margin-top: 8px; outline: none;">
+                        </div>
+                        <div class="modal-actions">
+                            <button id="btn-schedule-toggle" class="btn-secondary" style="flex: 0.4; border-color: #3b82f6; color: #3b82f6;">📅</button>
+                            <button id="btn-cancel-modal" class="btn-secondary">Cancel</button>
+                            <button id="btn-start-download" class="btn-primary">Download</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="downloads-area">
+                    <div id="downloads-list" class="downloads-list">
+                        <!-- Download Items injected via JS -->
+                    </div>
+                </div>
+
+                <!-- Player Modal -->
+                <div id="player-modal" class="modal-overlay" style="display: none; z-index: 10000;">
+                    <div class="modal-content" style="width: 800px; max-width: 90%; background: black; padding: 0; border: none; overflow: hidden; position: relative; border-radius: 12px; box-shadow: 0 20px 40px rgba(0,0,0,0.8);">
+                        <button id="btn-close-player" style="position: absolute; top: 12px; right: 12px; z-index: 9999; background: rgba(255,255,255,0.2); color: white; border: none; border-radius: 50%; width: 32px; height: 32px; cursor: pointer; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); transition: background 0.2s;">
+                            <i data-lucide="x"></i>
+                        </button>
+                        <video id="player" playsinline controls>
+                            <!-- Source injected via JS -->
+                        </video>
+                    </div>
+                </div>
+
+                <!-- Detailed Info Drawer -->
+                <div id="details-drawer" class="details-drawer">
+                    <div class="drawer-header">
+                        <h3>Download Details</h3>
+                        <button id="btn-close-drawer" class="btn-icon drawer-close">
+                            <i data-lucide="x"></i>
+                        </button>
+                    </div>
+                    <div class="drawer-content">
+                        <!-- Content injected via JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings View -->
+            <div id="view-settings" class="view-section">
+                <header class="top-bar">
+                    <h2 style="font-weight: 700; font-size: 24px;">Settings</h2>
+                </header>
+                <div class="settings-area">
+                    <!-- Section 1: Download Location -->
+                    <div class="settings-section">
+                        <div class="settings-section-header">
+                            <i data-lucide="hard-drive" style="color: var(--text-muted); width: 22px; height: 22px;"></i>
+                            <h3>Download Location</h3>
+                        </div>
+                        <p class="settings-desc">Set the default save path. If you pick a folder from the URL bar, it overrides this for that download only.</p>
+                        <div class="settings-path-row">
+                            <div class="settings-path-display" id="settings-default-path-display">
+                                <i data-lucide="folder"></i>
+                                <span id="settings-path-text">Loading...</span>
+                            </div>
+                            <button id="btn-settings-change-path" class="btn-settings-action">
+                                <i data-lucide="folder-open"></i>
+                                Change Folder
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Section 2: Performance & Power -->
+                    <div class="settings-section">
+                        <div class="settings-section-header">
+                            <i data-lucide="zap" style="color: var(--text-muted); width: 22px; height: 22px;"></i>
+                            <h3>Performance & Power Saving</h3>
+                        </div>
+                        <p class="settings-desc">Reduce animations and GPU usage to save power and lower system resource consumption.</p>
+                        
+                        <div class="settings-toggle-row">
+                            <div class="settings-toggle-info">
+                                <span class="settings-toggle-label">Power Saver Mode</span>
+                                <span class="settings-toggle-desc">Disables all animations, background effects, and shimmer to significantly reduce GPU & CPU usage</span>
+                            </div>
+                            <label class="toggle-switch" id="toggle-power-saver">
+                                <input type="checkbox" id="checkbox-power-saver">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="settings-toggle-row">
+                            <div class="settings-toggle-info">
+                                <span class="settings-toggle-label">Reduce Hover Effects</span>
+                                <span class="settings-toggle-desc">Disables hover animations on cards and buttons for lighter performance</span>
+                            </div>
+                            <label class="toggle-switch" id="toggle-reduce-hover">
+                                <input type="checkbox" id="checkbox-reduce-hover">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Section 3: Restore Defaults -->
+                    <div class="settings-section">
+                        <div class="settings-section-header">
+                            <i data-lucide="rotate-ccw" style="color: var(--text-muted); width: 22px; height: 22px;"></i>
+                            <h3>Restore Defaults</h3>
+                        </div>
+                        <p class="settings-desc">Reset all settings to their original default values.</p>
+                        <button id="btn-restore-defaults" class="btn-settings-danger">
+                            <i data-lucide="rotate-ccw" style="width: 16px; height: 16px;"></i>
+                            Restore Default Settings
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Statistics View -->
+            <div id="view-stats" class="view-section">
+                <header class="top-bar">
+                    <h2 style="font-weight: 700; font-size: 24px;">📊 Statistics & Data Management</h2>
+                </header>
+                <div class="stats-area" style="padding: 32px; overflow-y: auto; height: 100%;">
+                    <!-- Stats Summary Cards -->
+                    <div class="stats-grid">
+                        <div class="stat-card stat-card-accent">
+                            <div class="stat-icon-wrap" style="background: rgba(99, 102, 241, 0.15);">
+                                <i data-lucide="download" style="color: #818cf8; width: 28px; height: 28px;"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">Total Downloads</span>
+                                <span class="stat-value" id="stat-total-files">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon-wrap" style="background: rgba(16, 185, 129, 0.15);">
+                                <i data-lucide="check-circle" style="color: #34d399; width: 28px; height: 28px;"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">Completed</span>
+                                <span class="stat-value" id="stat-completed" style="color: #34d399;">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon-wrap" style="background: rgba(239, 68, 68, 0.15);">
+                                <i data-lucide="alert-triangle" style="color: #f87171; width: 28px; height: 28px;"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">Errors</span>
+                                <span class="stat-value" id="stat-errors" style="color: #f87171;">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon-wrap" style="background: rgba(59, 130, 246, 0.15);">
+                                <i data-lucide="hard-drive" style="color: #60a5fa; width: 28px; height: 28px;"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">Total Downloaded</span>
+                                <span class="stat-value" id="stat-total-bytes" style="color: #60a5fa;">0 B</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon-wrap" style="background: rgba(168, 85, 247, 0.15);">
+                                <i data-lucide="film" style="color: #c084fc; width: 28px; height: 28px;"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">Videos</span>
+                                <span class="stat-value" id="stat-videos" style="color: #c084fc;">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon-wrap" style="background: rgba(251, 191, 36, 0.15);">
+                                <i data-lucide="music" style="color: #fbbf24; width: 28px; height: 28px;"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">Audio</span>
+                                <span class="stat-value" id="stat-audios" style="color: #fbbf24;">0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Chart + Actions Row -->
+                    <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-top: 24px;">
+                        <div class="stat-card" style="flex: 1.5; min-width: 320px; padding: 28px;">
+                            <h3 style="margin-bottom: 16px; font-size: 16px; font-weight: 600; color: var(--text-main);">Download Distribution</h3>
+                            <canvas id="downloadsChart" style="max-width: 100%; max-height: 280px;"></canvas>
+                        </div>
+                        <div class="stat-card" style="flex: 1; min-width: 260px; padding: 28px; display: flex; flex-direction: column; gap: 16px;">
+                            <h3 style="margin-bottom: 8px; font-size: 16px; font-weight: 600; color: var(--text-main);">Data Management</h3>
+                            <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">Manage your download history and clean up temporary or orphaned files.</p>
+                            <button id="btn-cleanup-temps" class="btn-settings-action" style="width: 100%; justify-content: center;">
+                                <i data-lucide="trash-2"></i>
+                                Clean Temp Files
+                            </button>
+                            <button id="btn-clear-history" class="btn-settings-danger" style="width: 100%; justify-content: center; margin-top: auto;">
+                                <i data-lucide="database" style="width: 16px; height: 16px;"></i>
+                                Clear All History
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="vendor/axios.min.js"></script>
+    <script src="vendor/toastify.min.js"></script>
+    <script src="vendor/chart.js"></script>
+    <script src="vendor/plyr.js"></script>
+    <script src="vendor/sweetalert2.min.js"></script>
+    <script src="vendor/Sortable.min.js"></script>
+    <script src="vendor/confetti.browser.min.js"></script>
+    
+    <!-- 5 New Libraries -->
+    <script src="vendor/lucide.min.js"></script>
+    <script src="vendor/popper.min.js"></script>
+    <script src="vendor/tippy.min.js"></script>
+    <script src="vendor/gsap.min.js"></script>
+    <script src="vendor/dayjs.min.js"></script>
+    <script src="vendor/three.min.js"></script>
+    <script src="vendor/vanta.halo.min.js"></script>
+
+    <script src="url-detector.js"></script>
+    <script src="mobile-bridge.js"></script>
+    <script src="renderer.js"></script>
+</body>
+</html>

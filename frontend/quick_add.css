@@ -1,0 +1,350 @@
+/* ====================================
+   Ledo Quick Add — Premium Light UI
+   ==================================== */
+
+:root {
+    --bg-base:        rgba(255, 255, 255, 0.96);
+    --bg-glass:       rgba(248, 248, 252, 0.8);
+    --bg-glass-hover: rgba(240, 240, 250, 0.9);
+    --border-subtle:  rgba(0, 0, 0, 0.07);
+    --border-glow:    rgba(99, 102, 241, 0.2);
+
+    --text-primary:   #1a1a2e;
+    --text-secondary: #4b5563;
+    --text-muted:     #9ca3af;
+
+    --accent-start:    #6366f1;
+    --accent-end:      #a855f7;
+    --accent-gradient: linear-gradient(135deg, var(--accent-start), var(--accent-end));
+    --accent-glow:     rgba(99, 102, 241, 0.15);
+
+    --success-color: #059669;
+    --success-glow:  rgba(5, 150, 105, 0.08);
+    --error-color:   #dc2626;
+    --error-glow:    rgba(220, 38, 38, 0.08);
+
+    --radius:    14px;
+    --radius-sm: 8px;
+    --radius-xs: 6px;
+
+    --shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.06),
+        0 20px 40px rgba(0, 0, 0, 0.12),
+        0 0 40px rgba(99, 102, 241, 0.06);
+}
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    background: transparent !important;
+    overflow: hidden;
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -webkit-app-region: drag;
+    padding: 10px;
+    line-height: 1;
+}
+
+.quick-add-container {
+    background: var(--bg-base);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(32px) saturate(180%);
+    -webkit-backdrop-filter: blur(32px) saturate(180%);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: popIn 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+    position: relative;
+}
+
+/* Gradient border overlay */
+.quick-add-container::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: var(--radius);
+    padding: 1px;
+    background: linear-gradient(
+        145deg,
+        rgba(99, 102, 241, 0.3) 0%,
+        rgba(0, 0, 0, 0.04) 50%,
+        rgba(168, 85, 247, 0.2) 100%
+    );
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    pointer-events: none;
+}
+
+@keyframes popIn {
+    from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Header ──────────────────────────── */
+
+.header-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px 0;
+}
+
+.logo-badge {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.logo-badge svg {
+    filter: drop-shadow(0 0 5px rgba(99, 102, 241, 0.4));
+}
+
+.logo-text {
+    font-size: 13px;
+    font-weight: 800;
+    background: var(--accent-gradient);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}
+
+.shortcut-hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    background: var(--bg-glass);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+    padding: 3px 8px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    -webkit-app-region: no-drag;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.shortcut-hint:hover {
+    color: var(--text-secondary);
+    border-color: rgba(0, 0, 0, 0.12);
+}
+
+/* ── Input ────────────────────────────── */
+
+.input-wrapper {
+    padding: 10px 14px 8px;
+}
+
+.input-wrapper input {
+    width: 100%;
+    background: var(--bg-glass);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 13.5px;
+    font-weight: 400;
+    padding: 10px 13px;
+    outline: none;
+    caret-color: var(--accent-start);
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+    -webkit-app-region: no-drag;
+}
+
+.input-wrapper input::placeholder {
+    color: var(--text-muted);
+}
+
+.input-wrapper input:hover {
+    background: var(--bg-glass-hover);
+    border-color: rgba(0, 0, 0, 0.1);
+}
+
+.input-wrapper input:focus {
+    background: rgba(129, 140, 248, 0.05);
+    border-color: rgba(129, 140, 248, 0.5);
+    box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.1),
+                inset 0 0 12px rgba(129, 140, 248, 0.03);
+}
+
+/* ── Options Row ──────────────────────── */
+
+.options-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 14px 12px;
+    gap: 10px;
+}
+
+.quality-pills {
+    display: flex;
+    gap: 5px;
+    flex-wrap: nowrap;
+}
+
+/* ── Pills ────────────────────────────── */
+
+.pill {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg-glass);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 5px 10px;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    -webkit-app-region: no-drag;
+    white-space: nowrap;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+
+.pill:hover {
+    color: var(--text-primary);
+    background: rgba(99, 102, 241, 0.06);
+    border-color: rgba(99, 102, 241, 0.2);
+    transform: translateY(-1px);
+}
+
+.pill.active {
+    background: rgba(129, 140, 248, 0.12);
+    border-color: rgba(129, 140, 248, 0.4);
+    color: var(--accent-start);
+    box-shadow:
+        0 0 14px rgba(129, 140, 248, 0.18),
+        inset 0 1px 0 rgba(129, 140, 248, 0.15);
+}
+
+.pill svg {
+    flex-shrink: 0;
+}
+
+/* ── Download Button ──────────────────── */
+
+.btn-download {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-gradient);
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 9px 14px;
+    cursor: pointer;
+    color: #fff;
+    transition: all 0.2s ease;
+    -webkit-app-region: no-drag;
+    flex-shrink: 0;
+    box-shadow:
+        0 4px 14px rgba(129, 140, 248, 0.35),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    position: relative;
+    overflow: hidden;
+}
+
+/* Shimmer sweep on hover */
+.btn-download::before {
+    content: '';
+    position: absolute;
+    top: 0; left: -70%;
+    width: 50%;
+    height: 100%;
+    background: linear-gradient(
+        120deg,
+        rgba(255,255,255,0) 0%,
+        rgba(255,255,255,0.25) 50%,
+        rgba(255,255,255,0) 100%
+    );
+    transform: skewX(-20deg);
+    transition: left 0.4s ease;
+}
+
+.btn-download:hover::before { left: 130%; }
+
+.btn-download:hover {
+    transform: translateY(-1px);
+    box-shadow:
+        0 6px 20px rgba(129, 140, 248, 0.45),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.btn-download:active {
+    transform: translateY(0) scale(0.97);
+    box-shadow:
+        0 2px 8px rgba(129, 140, 248, 0.3),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.btn-download:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.btn-download svg { position: relative; z-index: 1; }
+
+/* ── Status Bar ───────────────────────── */
+
+.status-bar {
+    background: var(--success-glow);
+    border-top: 1px solid rgba(52, 211, 153, 0.18);
+    padding: 8px 16px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--success-color);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    letter-spacing: 0.2px;
+    animation: fadeSlideUp 0.2s ease both;
+}
+
+.status-bar.error {
+    background: var(--error-glow);
+    border-top-color: rgba(248, 113, 113, 0.2);
+    color: var(--error-color);
+}
+
+@keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Status Dot ───────────────────────── */
+
+.status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--success-color);
+    flex-shrink: 0;
+    box-shadow: 0 0 6px var(--success-color);
+    animation: pulseDot 1.6s ease-in-out infinite;
+}
+
+.status-bar.error .status-dot {
+    background: var(--error-color);
+    box-shadow: 0 0 6px var(--error-color);
+    animation: none;
+}
+
+@keyframes pulseDot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.4; transform: scale(0.75); }
+}
