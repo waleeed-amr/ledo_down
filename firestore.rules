@@ -2,16 +2,77 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Users can only read and write their own profile document
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+    // Helper: identify an admin via custom claim OR a known admin email
+    function isAdmin() {
+      return request.auth != null && (
+        request.auth.token.admin == true ||
+        request.auth.token.email == 'admin@ledodown.local' ||
+        request.auth.token.email == 'waleed@ledodown.local' ||
+        request.auth.token.email == 'admin@ledo.app'
+      );
     }
-    
-    // Crash reports: anyone can create (including anonymous users)
-    // Only the admin can read/delete them.
+
+    // Helper: any authenticated user
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Helper: owner of the document
+    function isOwner(userId) {
+      return isAuth() && request.auth.uid == userId;
+    }
+
+    // Users can read/write their own profile
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+      // Admin can read user profiles
+      allow read: if isAdmin();
+
+      // User account subcollection (profile, notifications, preferences, etc.)
+      match /account/{document=**} {
+        allow read, write: if isOwner(userId);
+        // Admin can read (for audit purposes)
+        allow read: if isAdmin();
+      }
+
+      // Activity log
+      match /activity_log/{logId} {
+        allow read, write: if isOwner(userId);
+        allow read: if isAdmin();
+      }
+
+      // Sessions management
+      match /sessions/{sessionId} {
+        allow read, write: if isOwner(userId);
+        allow read, write: if isAdmin();
+      }
+
+      // API tokens
+      match /tokens/{tokenId} {
+        allow read, write: if isOwner(userId);
+      }
+
+      // Messages sent by admin to users
+      match /messages/{messageId} {
+        allow read, delete: if isOwner(userId);
+        allow create, update: if isAdmin();
+      }
+    }
+
+    // Crash reports: anyone can create (incl. anonymous)
+    // Only admin can read/delete them.
     match /crash_reports/{reportId} {
       allow create: if true;
-      allow read, delete: if request.auth != null && request.auth.token.email == 'admin@ledodown.local';
+      allow read, delete: if isAdmin();
+    }
+
+    // Support tickets created by users
+    match /support_tickets/{ticketId} {
+      // Any authenticated user can open a ticket
+      allow create: if isAuth();
+      // Admin can read, update (change status), or delete
+      allow read, update, delete: if isAdmin();
     }
   }
 }

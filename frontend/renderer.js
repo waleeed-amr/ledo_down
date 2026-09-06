@@ -525,11 +525,12 @@ document.getElementById('btn-fetch-info').addEventListener('click', async () => 
         const data = response.data;
 
         if (data.status === 'success') {
-            document.getElementById('modal-title').innerText = data.title;
+            const dlInfo = data.download_info || data;
+            document.getElementById('modal-title').innerText = dlInfo.title || 'Unknown Title';
             const optionsDiv = document.getElementById('quality-options');
-            const sizes = data.sizes || {};
+            const sizes = dlInfo.sizes || {};
 
-            if (data.is_direct) {
+            if (dlInfo.is_direct) {
                 window.isDirectFile = true;
                 optionsDiv.innerHTML = `
                     <label class="quality-option active">
@@ -1190,8 +1191,9 @@ document.querySelectorAll('.nav-item').forEach(item => {
 // ACCOUNT & AUTH LOGIC
 // ============================================
 
-window.addEventListener('firebase-ready', () => {
+function initFirebaseAuth() {
     const { firebaseApp } = window;
+    if (!firebaseApp) return;
     
     const authSection = document.getElementById('auth-section');
     const profileSection = document.getElementById('profile-section');
@@ -1199,6 +1201,8 @@ window.addEventListener('firebase-ready', () => {
     const profileUsername = document.getElementById('profile-username');
     const profileAvatar = document.getElementById('profile-avatar');
     
+    let unsubscribeInbox = null;
+
     // Auth State Changed
     firebaseApp.onAuthStateChanged((user) => {
         if (user) {
@@ -1207,9 +1211,41 @@ window.addEventListener('firebase-ready', () => {
             
             profileUsername.innerText = user.isAnonymous ? 'Guest User' : (user.displayName || 'User');
             profileAvatar.src = user.photoURL || 'icon.png';
+            
+            // Listen to Inbox
+            if (unsubscribeInbox) unsubscribeInbox();
+            unsubscribeInbox = firebaseApp.listenToInbox((messages) => {
+                const inboxContainer = document.getElementById('inbox-messages');
+                const emptyMsg = document.getElementById('inbox-empty');
+                if (!inboxContainer) return;
+                
+                if (messages.length === 0) {
+                    emptyMsg.style.display = 'block';
+                    // clear old messages except empty message
+                    Array.from(inboxContainer.children).forEach(c => { if(c.id !== 'inbox-empty') c.remove() });
+                } else {
+                    emptyMsg.style.display = 'none';
+                    inboxContainer.innerHTML = '';
+                    messages.forEach(msg => {
+                        const div = document.createElement('div');
+                        div.style = "background: rgba(99, 102, 241, 0.1); border-right: 3px solid #6366f1; padding: 10px; border-radius: 6px; font-size: 13px;";
+                        div.innerHTML = `
+                            <div style="color: #6366f1; font-weight: bold; margin-bottom: 4px;">الادارة:</div>
+                            <div style="color: var(--text-main);">${msg.text || msg.message}</div>
+                            <div style="color: var(--text-muted); font-size: 10px; margin-top: 4px; text-align: left;">${new Date(msg.createdAt).toLocaleString()}</div>
+                        `;
+                        inboxContainer.appendChild(div);
+                    });
+                    inboxContainer.appendChild(emptyMsg); // keep it at the bottom but hidden
+                }
+            });
         } else {
             authSection.style.display = 'block';
             profileSection.style.display = 'none';
+            if (unsubscribeInbox) {
+                unsubscribeInbox();
+                unsubscribeInbox = null;
+            }
         }
     });
     
@@ -1245,6 +1281,31 @@ window.addEventListener('firebase-ready', () => {
         else authError.innerText = "";
     });
     
+    // Support Ticket Submit
+    document.getElementById('btn-submit-support')?.addEventListener('click', async () => {
+        const subject = document.getElementById('support-subject').value;
+        const msg = document.getElementById('support-message').value;
+        if (!subject || !msg) return showToast("يرجى تعبئة جميع الحقول أولاً", "#ef4444");
+        
+        const btn = document.getElementById('btn-submit-support');
+        btn.disabled = true;
+        btn.innerHTML = `<i data-lucide="loader" class="spinner"></i> جاري الإرسال...`;
+        if (window.lucide) lucide.createIcons();
+
+        const res = await firebaseApp.submitSupportTicket(subject, msg);
+        if (res.success) {
+            showToast("تم إرسال رسالتك للإدارة بنجاح!", "#10b981");
+            document.getElementById('support-subject').value = '';
+            document.getElementById('support-message').value = '';
+        } else {
+            showToast("حدث خطأ أثناء الإرسال: " + res.error, "#ef4444");
+        }
+        
+        btn.disabled = false;
+        btn.innerHTML = `<i data-lucide="send"></i> إرسال التذكرة`;
+        if (window.lucide) lucide.createIcons();
+    });
+
     // Logout
     document.getElementById('btn-logout')?.addEventListener('click', async () => {
         await firebaseApp.logout();
@@ -1265,7 +1326,14 @@ window.addEventListener('firebase-ready', () => {
             document.getElementById('profile-status').innerText = "Avatar upload failed: " + res.error;
         }
     });
-});
+}
+
+// Call init if already loaded, else wait
+if (window.firebaseApp) {
+    initFirebaseAuth();
+} else {
+    window.addEventListener('firebase-ready', initFirebaseAuth);
+}
 
 // ============================================
 // RIGHT SIDEBAR TOGGLE

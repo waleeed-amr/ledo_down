@@ -488,7 +488,7 @@
             </div>
 
             <!-- Account View -->
-            <div id="view-account" class="view-section">
+            <div id="view-account" class="view-section" style="overflow-y: auto; height: 100%; padding-bottom: 40px;">
                 <header class="top-bar">
                     <h2>My Account</h2>
                 </header>
@@ -556,10 +556,122 @@
                         </div>
 
                         <div class="auth-body" style="margin-top: 30px;">
+                            
+                            <!-- Premium Perks -->
+                            <div style="background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(168, 85, 247, 0.1)); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 12px; padding: 16px; margin-bottom: 24px; text-align: center;">
+                                <h4 style="color: #c084fc; margin-bottom: 12px; font-size: 15px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                                    <i data-lucide="sparkles"></i> مميزات حسابك النشط
+                                </h4>
+                                <div style="display: flex; gap: 12px; justify-content: space-around; flex-wrap: wrap;">
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                                        <div style="background: rgba(16, 185, 129, 0.2); color: #34d399; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                                            <i data-lucide="cloud" style="width: 20px; height: 20px;"></i>
+                                        </div>
+                                        <span style="font-size: 11px; color: var(--text-muted);">مزامنة سحابية</span>
+                                    </div>
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                                        <div style="background: rgba(59, 130, 246, 0.2); color: #60a5fa; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                                            <i data-lucide="zap" style="width: 20px; height: 20px;"></i>
+                                        </div>
+                                        <span style="font-size: 11px; color: var(--text-muted);">سرعة قصوى</span>
+                                    </div>
+                                    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                                        <div style="background: rgba(239, 68, 68, 0.2); color: #f87171; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                                            <i data-lucide="life-buoy" style="width: 20px; height: 20px;"></i>
+                                        </div>
+                                        <span style="font-size: 11px; color: var(--text-muted);">دعم مميز</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Inbox Section -->
+                            <div style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; margin-bottom: 24px;">
+                                <h4 style="display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 12px; border-bottom: 1px solid var(--border-color); padding-bottom: 8px;">
+                                    <i data-lucide="inbox" style="width: 16px; height: 16px;"></i> صندوق الوارد
+                                </h4>
+                                <div id="inbox-messages" style="max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;">
+                                    <!-- Messages injected here -->
+                                    <div id="inbox-empty" style="text-align: center; color: var(--text-muted); font-size: 12px; padding: 12px 0;">
+                                        لا توجد رسائل جديدة.
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Support Form -->
+                            <div style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; margin-bottom: 24px;">
+                                <h4 style="display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 12px;">
+                                    <i data-lucide="message-square" style="width: 16px; height: 16px;"></i> تواصل مع الإدارة
+                                </h4>
+                                <div style="display: flex; flex-direction: column; gap: 12px;">
+                                    <input type="text" id="support-subject" placeholder="عنوان المشكلة / الاقتراح" class="modern-input" style="width: 100%; padding: 10px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: white; border-radius: 8px;">
+                                    <textarea id="support-message" placeholder="اشرح لنا المشكلة بالتفصيل..." class="modern-input" style="width: 100%; padding: 10px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: white; border-radius: 8px; height: 80px; resize: vertical;"></textarea>
+                                    <button id="btn-submit-support" class="btn-primary" style="padding: 10px; justify-content: center;">
+                                        <i data-lucide="send" style="width: 16px; height: 16px;"></i> إرسال التذكرة
+                                    </button>
+                                </div>
+                            </div>
+
                             <button id="btn-logout" class="btn-settings-danger auth-btn">
                                 <i data-lucide="log-out"></i>
-                                <span>Secure Logout</span>
+                                <span>تسجيل الخروج</span>
                             </button>
+                        </div>
+                    </div>
+
+                    <!-- Tutorials and Tips Section -->
+                    <div class="auth-card-modern" style="margin-top: 24px; text-align: right; direction: rtl;">
+                        <div class="auth-header" style="text-align: right;">
+                            <div class="auth-icon-wrap" style="background: rgba(16, 185, 129, 0.15);">
+                                <i data-lucide="book-open" style="color: #34d399;"></i>
+                            </div>
+                            <h3 style="font-family: 'Tajawal', sans-serif;">شروحات ونصائح الاستخدام</h3>
+                            <p>كيف تستفيد من التطبيق بأفضل شكل ممكن وتسرّع عملية التحميل.</p>
+                        </div>
+                        
+                        <div class="auth-body" style="gap: 20px; font-family: 'Tajawal', sans-serif;">
+                            
+                            <!-- Tip 1 -->
+                            <div style="background: var(--bg-dark); border-radius: 12px; border: 1px solid var(--border-color); overflow: hidden; display: flex; flex-direction: row-reverse; align-items: center; gap: 16px;">
+                                <img src="tut_quick.jpg" alt="Quick Add" style="width: 120px; height: 120px; object-fit: cover; border-right: 1px solid var(--border-color);">
+                                <div style="padding: 16px; flex: 1;">
+                                    <h4 style="display: flex; align-items: center; gap: 8px; color: var(--accent-primary); margin-bottom: 4px; font-size: 15px;">
+                                        <i data-lucide="zap" style="width: 16px; height: 16px;"></i> التحميل السريع (التقاط الروابط)
+                                    </h4>
+                                    <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5; margin: 0;">
+                                        انسخ أي رابط فيديو.. وسيقوم التطبيق بالتقاطه تلقائياً في لمح البصر! لا حاجة لفتح التطبيق في كل مرة. فقط دعه يعمل في الخلفية واستمتع بالسرعة.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <!-- Tip 2 -->
+                            <div style="background: var(--bg-dark); border-radius: 12px; border: 1px solid var(--border-color); overflow: hidden; display: flex; flex-direction: row-reverse; align-items: center; gap: 16px;">
+                                <img src="tut_chrome.jpg" alt="Chrome Extension" style="width: 120px; height: 120px; object-fit: cover; border-right: 1px solid var(--border-color);">
+                                <div style="padding: 16px; flex: 1;">
+                                    <h4 style="display: flex; align-items: center; gap: 8px; color: #fbbf24; margin-bottom: 4px; font-size: 15px;">
+                                        <i data-lucide="globe" style="width: 16px; height: 16px;"></i> إضافة المتصفح (زر سحري)
+                                    </h4>
+                                    <p style="font-size: 12px; color: var(--text-muted); line-height: 1.5; margin: 0;">
+                                        زر تحميل مباشر بجانب كل فيديو تشاهده! 🔥<br>
+                                        1️⃣ فعل <b>وضع المطور</b> في إضافات كروم.<br>
+                                        2️⃣ اضغط <b>Load unpacked</b>.<br>
+                                        3️⃣ اختر مجلد <code>browser_extension</code> ومبروك!
+                                    </p>
+                                </div>
+                            </div>
+
+                            <!-- Tip 3 -->
+                            <div style="background: var(--bg-dark); border-radius: 12px; border: 1px solid var(--border-color); overflow: hidden; display: flex; flex-direction: row-reverse; align-items: center; gap: 16px;">
+                                <img src="tut_batch.jpg" alt="Batch Download" style="width: 120px; height: 120px; object-fit: cover; border-right: 1px solid var(--border-color);">
+                                <div style="padding: 16px; flex: 1;">
+                                    <h4 style="display: flex; align-items: center; gap: 8px; color: #c084fc; margin-bottom: 4px; font-size: 15px;">
+                                        <i data-lucide="layers" style="width: 16px; height: 16px;"></i> التحميل المتعدد (الضربة القاضية)
+                                    </h4>
+                                    <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5; margin: 0;">
+                                        تخلص من الملل! لا تحمل الفيديوهات واحداً تلو الآخر. انقر على أيقونة الطبقات <i data-lucide="layers" style="width: 12px; height: 12px; display: inline-block;"></i> بجوار شريط البحث، الصق قائمة الروابط وحمّل كل شيء بضغطة زر واحدة!
+                                    </p>
+                                </div>
+                            </div>
+
                         </div>
                     </div>
 

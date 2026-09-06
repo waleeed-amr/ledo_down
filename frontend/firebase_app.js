@@ -129,6 +129,45 @@
             }
         },
 
+        // Submit Support Ticket
+        submitSupportTicket: async (subject, message) => {
+            if (!auth.currentUser) return { success: false, error: "Not logged in" };
+            try {
+                await db.collection("support_tickets").add({
+                    userId: auth.currentUser.uid,
+                    email: auth.currentUser.email || 'anon@local',
+                    subject: subject,
+                    message: message,
+                    createdAt: new Date().toISOString(),
+                    status: 'open'
+                });
+                return { success: true };
+            } catch (error) {
+                return { success: false, error: error.message };
+            }
+        },
+
+        // Listen to Inbox Messages
+        listenToInbox: (callback) => {
+            if (!auth.currentUser || auth.currentUser.isAnonymous) return null;
+            return db.collection("users")
+                .doc(auth.currentUser.uid)
+                .collection("messages")
+                .orderBy("createdAt", "desc")
+                .onSnapshot(
+                    (snapshot) => {
+                        const messages = [];
+                        snapshot.forEach((doc) => {
+                            messages.push({ id: doc.id, ...doc.data() });
+                        });
+                        callback(messages);
+                    },
+                    (error) => {
+                        console.error("Inbox listen error:", error);
+                    }
+                );
+        },
+
         // Auth state listener
         onAuthStateChanged: (callback) => {
             auth.onAuthStateChanged(callback);

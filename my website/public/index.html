@@ -1,57 +1,1226 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ledo Admin Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Ledo Admin Command Center">
+  <title>Ledo · Command Center</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Icons (Lucide) -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1' y1='0' y2='1'%3E%3Cstop offset='0' stop-color='%236366f1'/%3E%3Cstop offset='1' stop-color='%23ec4899'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='100' height='100' rx='22' fill='url(%23g)'/%3E%3Ctext x='50' y='66' font-family='Outfit,Arial' font-size='58' font-weight='800' text-anchor='middle' fill='white'%3EL%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div id="login-view" class="container" style="display: flex; justify-content: center; align-items: center; min-height: 80vh;">
-        <div class="card" style="width: 100%; max-width: 420px; margin: 0 auto;">
-            <h2>Admin Login</h2>
-            <form id="login-form">
-                <div class="input-group">
-                    <input type="email" id="admin-email" placeholder="Email Address" autocomplete="off" required>
-                </div>
-                <div class="input-group">
-                    <input type="password" id="admin-password" placeholder="Password" autocomplete="off" required>
-                </div>
-                <button type="submit" id="btn-login" class="btn">Login to Dashboard</button>
-            </form>
-            <div id="login-error"></div>
+  <!-- Aurora background -->
+  <div class="aurora" aria-hidden="true">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+    <div class="grid-overlay"></div>
+  </div>
+
+  <!-- ============ LOGIN VIEW ============ -->
+  <div id="login-view" class="view login-view">
+    <div class="login-card">
+      <div class="login-header">
+        <div class="brand-mark">
+          <span>L</span>
         </div>
+        <h1>Command Center</h1>
+        <p>Sign in to manage the Ledo platform</p>
+      </div>
+
+      <form id="login-form" class="login-form" novalidate>
+        <div class="field">
+          <label for="admin-email">Email</label>
+          <div class="input-wrap">
+            <i data-lucide="mail"></i>
+            <input type="email" id="admin-email" placeholder="admin@ledodown.local" autocomplete="username" required>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="admin-password">Password</label>
+          <div class="input-wrap">
+            <i data-lucide="lock"></i>
+            <input type="password" id="admin-password" placeholder="••••••••" autocomplete="current-password" required>
+            <button type="button" class="suffix-btn" data-toggle-pwd="admin-password" aria-label="Show password">
+              <i data-lucide="eye"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="login-options">
+          <label class="check">
+            <input type="checkbox" id="remember-me">
+            <span class="check-box"></span>
+            <span>Remember me</span>
+          </label>
+        </div>
+
+        <button type="submit" id="btn-login" class="btn-primary">
+          <span>Sign in</span>
+          <i data-lucide="arrow-right"></i>
+        </button>
+
+        <div id="login-error" class="login-error"></div>
+      </form>
     </div>
+    <div class="login-bg-text">LEDO</div>
+  </div>
 
-    <div id="dashboard-view" class="container" style="display: none;">
-        <header>
-            <h2>Ledo Telemetry</h2>
-            <button id="btn-logout" class="btn btn-outline">Logout</button>
-        </header>
+  <!-- ============ DASHBOARD VIEW ============ -->
+  <div id="dashboard-view" class="view dashboard-view" hidden>
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <div class="brand">
+          <div class="brand-mark small"><span>L</span></div>
+          <div class="brand-text">
+            <div class="brand-name">Ledo</div>
+            <div class="brand-sub">Command Center</div>
+          </div>
+        </div>
+        <button class="icon-btn" id="collapse-sidebar" title="Collapse sidebar" aria-label="Collapse sidebar">
+          <i data-lucide="panel-left-close"></i>
+        </button>
+      </div>
 
-        <div class="card">
-            <h3 style="margin-top: 0; margin-bottom: 20px; font-weight: 500;">Recent Crash Reports</h3>
-            <div class="table-responsive">
-                <table id="crash-table">
-                    <thead>
-                        <tr>
-                            <th>Time</th>
-                            <th>Category</th>
-                            <th>Domain</th>
-                            <th>Message</th>
-                            <th>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody id="crash-tbody">
-                        <tr><td colspan="5" style="text-align: center; padding: 30px;">Loading reports...</td></tr>
-                    </tbody>
-                </table>
+      <nav class="nav" aria-label="Primary">
+        <div class="nav-section">
+          <div class="nav-label">Workspace</div>
+          <a href="#overview" class="nav-item active" data-route="overview">
+            <i data-lucide="layout-dashboard"></i>
+            <span class="nav-text">Overview</span>
+          </a>
+          <a href="#tickets" class="nav-item" data-route="tickets">
+            <i data-lucide="ticket"></i>
+            <span class="nav-text">Tickets</span>
+            <span class="nav-badge" id="tickets-count">0</span>
+          </a>
+          <a href="#users" class="nav-item" data-route="users">
+            <i data-lucide="users"></i>
+            <span class="nav-text">Users</span>
+          </a>
+          <a href="#crashes" class="nav-item" data-route="crashes">
+            <i data-lucide="bug"></i>
+            <span class="nav-text">Crash Reports</span>
+          </a>
+        </div>
+        <div class="nav-section">
+          <div class="nav-label">Insights</div>
+          <a href="#analytics" class="nav-item" data-route="analytics">
+            <i data-lucide="bar-chart-3"></i>
+            <span class="nav-text">Analytics</span>
+          </a>
+        </div>
+        <div class="nav-section">
+          <div class="nav-label">You</div>
+          <a href="#account" class="nav-item" data-route="account">
+            <i data-lucide="user-circle-2"></i>
+            <span class="nav-text">My Account</span>
+          </a>
+          <a href="#settings" class="nav-item" data-route="settings">
+            <i data-lucide="settings-2"></i>
+            <span class="nav-text">Settings</span>
+          </a>
+        </div>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="admin-card">
+          <div class="admin-avatar" id="admin-avatar">A</div>
+          <div class="admin-info">
+            <div class="admin-name" id="admin-name">Admin</div>
+            <div class="admin-role" id="admin-role">Administrator</div>
+          </div>
+          <button class="icon-btn" id="btn-logout" title="Sign out" aria-label="Sign out">
+            <i data-lucide="log-out"></i>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <!-- Topbar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-btn mobile-only" id="mobile-menu" aria-label="Open menu">
+            <i data-lucide="menu"></i>
+          </button>
+          <div>
+            <div class="page-title" id="page-title">Overview</div>
+            <div class="page-sub" id="page-sub">Welcome back — here's what's happening today</div>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <div class="search-box">
+            <i data-lucide="search"></i>
+            <input type="text" id="global-search" placeholder="Search tickets, users..." />
+            <kbd>⌘K</kbd>
+          </div>
+          <button class="icon-btn" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+            <i data-lucide="moon"></i>
+          </button>
+          <button class="icon-btn notif-btn" id="notif-btn" title="Notifications" aria-label="Notifications">
+            <i data-lucide="bell"></i>
+            <span class="dot" id="notif-dot" hidden></span>
+          </button>
+          <div class="status-pill" title="Real-time connection status">
+            <span class="status-dot"></span>
+            <span>Live</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Content -->
+      <section class="content">
+        <!-- ===== OVERVIEW ===== -->
+        <div class="route active" data-route="overview">
+          <div class="kpi-grid">
+            <div class="kpi-card kpi-tickets">
+              <div class="kpi-head">
+                <div class="kpi-icon"><i data-lucide="ticket"></i></div>
+                <div class="kpi-trend" data-kpi-trend="total">—</div>
+              </div>
+              <div class="kpi-value" data-kpi="total">0</div>
+              <div class="kpi-label">Total Tickets</div>
+              <div class="kpi-spark" data-spark="total"></div>
             </div>
-        </div>
-    </div>
 
-    <script type="module" src="app.js"></script>
+            <div class="kpi-card kpi-open">
+              <div class="kpi-head">
+                <div class="kpi-icon"><i data-lucide="circle-dot"></i></div>
+                <div class="kpi-trend" data-kpi-trend="open">—</div>
+              </div>
+              <div class="kpi-value" data-kpi="open">0</div>
+              <div class="kpi-label">Open</div>
+              <div class="kpi-spark" data-spark="open"></div>
+            </div>
+
+            <div class="kpi-card kpi-progress">
+              <div class="kpi-head">
+                <div class="kpi-icon"><i data-lucide="loader"></i></div>
+                <div class="kpi-trend" data-kpi-trend="progress">—</div>
+              </div>
+              <div class="kpi-value" data-kpi="progress">0</div>
+              <div class="kpi-label">In Progress</div>
+              <div class="kpi-spark" data-spark="progress"></div>
+            </div>
+
+            <div class="kpi-card kpi-resolved">
+              <div class="kpi-head">
+                <div class="kpi-icon"><i data-lucide="check-circle-2"></i></div>
+                <div class="kpi-trend" data-kpi-trend="resolved">—</div>
+              </div>
+              <div class="kpi-value" data-kpi="resolved">0</div>
+              <div class="kpi-label">Resolved</div>
+              <div class="kpi-spark" data-spark="resolved"></div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="card chart-card">
+              <div class="card-head">
+                <div>
+                  <h3>Tickets Timeline</h3>
+                  <div class="card-sub">Last 14 days</div>
+                </div>
+                <div class="seg" id="range-seg">
+                  <button class="seg-btn" data-range="7">7D</button>
+                  <button class="seg-btn active" data-range="14">14D</button>
+                  <button class="seg-btn" data-range="30">30D</button>
+                </div>
+              </div>
+              <div class="chart-wrap"><canvas id="chart-timeline"></canvas></div>
+            </div>
+
+            <div class="card chart-card">
+              <div class="card-head">
+                <div>
+                  <h3>By Status</h3>
+                  <div class="card-sub">Distribution</div>
+                </div>
+              </div>
+              <div class="chart-wrap"><canvas id="chart-status"></canvas></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h3>Recent Activity</h3>
+                <div class="card-sub">Latest tickets from users</div>
+              </div>
+              <a href="#tickets" class="link" data-route="tickets">View all <i data-lucide="arrow-right"></i></a>
+            </div>
+            <div id="recent-activity" class="activity-list">
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+              <div class="skeleton-row"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== TICKETS ===== -->
+        <div class="route" data-route="tickets" hidden>
+          <div class="toolbar">
+            <div class="filters" id="status-filters">
+              <button class="chip active" data-filter="all">
+                All <span class="chip-count" data-count="all">0</span>
+              </button>
+              <button class="chip" data-filter="open">
+                <span class="dot dot-open"></span> Open <span class="chip-count" data-count="open">0</span>
+              </button>
+              <button class="chip" data-filter="in_progress">
+                <span class="dot dot-progress"></span> In Progress <span class="chip-count" data-count="progress">0</span>
+              </button>
+              <button class="chip" data-filter="resolved">
+                <span class="dot dot-resolved"></span> Resolved <span class="chip-count" data-count="resolved">0</span>
+              </button>
+            </div>
+            <div class="search-box small">
+              <i data-lucide="search"></i>
+              <input type="text" id="ticket-search" placeholder="Search by subject, email, message..." />
+            </div>
+          </div>
+
+          <div class="card no-pad">
+            <div class="table-wrap">
+              <table class="data-table" id="tickets-table">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Subject</th>
+                    <th>User</th>
+                    <th>Created</th>
+                    <th class="t-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="tickets-tbody">
+                  <tr><td colspan="5" class="empty">Loading tickets…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="table-foot">
+              <div class="muted" id="tickets-summary">—</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== USERS ===== -->
+        <div class="route" data-route="users" hidden>
+          <div class="toolbar">
+            <div class="filters">
+              <button class="chip active" data-usersort="tickets">Most tickets</button>
+              <button class="chip" data-usersort="recent">Recent activity</button>
+              <button class="chip" data-usersort="alpha">A → Z</button>
+            </div>
+            <div class="search-box small">
+              <i data-lucide="search"></i>
+              <input type="text" id="user-search" placeholder="Search users..." />
+            </div>
+          </div>
+          <div class="users-grid" id="users-grid">
+            <div class="user-skeleton"></div>
+            <div class="user-skeleton"></div>
+            <div class="user-skeleton"></div>
+          </div>
+        </div>
+
+        <!-- ===== CRASHES ===== -->
+        <div class="route" data-route="crashes" hidden>
+          <div class="card no-pad">
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Email</th>
+                    <th>Subject</th>
+                    <th>Message</th>
+                  </tr>
+                </thead>
+                <tbody id="crashes-tbody">
+                  <tr><td colspan="4" class="empty">Loading crash reports…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== ANALYTICS ===== -->
+        <div class="route" data-route="analytics" hidden>
+          <div class="grid-2">
+            <div class="card chart-card">
+              <div class="card-head">
+                <div>
+                  <h3>Daily Volume</h3>
+                  <div class="card-sub">Last 30 days</div>
+                </div>
+              </div>
+              <div class="chart-wrap"><canvas id="chart-daily"></canvas></div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-head">
+                <div>
+                  <h3>Top Subjects</h3>
+                  <div class="card-sub">Most reported categories</div>
+                </div>
+              </div>
+              <div id="top-subjects" class="bar-list"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>Performance</h3>
+            </div>
+            <div class="perf-grid">
+              <div class="perf-item">
+                <div class="perf-label">Avg. response time</div>
+                <div class="perf-value" id="perf-response">—</div>
+              </div>
+              <div class="perf-item">
+                <div class="perf-label">Resolution rate</div>
+                <div class="perf-value" id="perf-resolve">—</div>
+              </div>
+              <div class="perf-item">
+                <div class="perf-label">Active users</div>
+                <div class="perf-value" id="perf-users">—</div>
+              </div>
+              <div class="perf-item">
+                <div class="perf-label">Tickets today</div>
+                <div class="perf-value" id="perf-today">—</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== MY ACCOUNT ===== -->
+        <div class="route" data-route="account" hidden>
+          <!-- Profile Hero -->
+          <div class="account-hero">
+            <div class="account-cover"></div>
+            <div class="account-hero-body">
+              <div class="account-avatar-wrap">
+                <div class="account-avatar" id="account-avatar">A</div>
+                <button class="avatar-upload-btn" id="avatar-upload-btn" title="Change avatar">
+                  <i data-lucide="camera"></i>
+                </button>
+              </div>
+              <div class="account-hero-info">
+                <div class="account-name-row">
+                  <h2 id="account-display-name">Admin</h2>
+                  <span class="verified-badge" id="account-verified">
+                    <i data-lucide="badge-check"></i> Verified
+                  </span>
+                </div>
+                <div class="account-email" id="account-email-display">—</div>
+                <div class="account-tags">
+                  <span class="tag tag-role"><i data-lucide="shield"></i> Administrator</span>
+                  <span class="tag"><i data-lucide="calendar"></i> Joined <span id="account-joined">—</span></span>
+                  <span class="tag"><i data-lucide="globe"></i> <span id="account-location">Earth</span></span>
+                </div>
+              </div>
+              <div class="account-hero-stats">
+                <div class="hero-stat">
+                  <div class="hero-stat-value" data-personal-stat="handled">0</div>
+                  <div class="hero-stat-label">Handled</div>
+                </div>
+                <div class="hero-stat">
+                  <div class="hero-stat-value" data-personal-stat="resolved">0</div>
+                  <div class="hero-stat-label">Resolved</div>
+                </div>
+                <div class="hero-stat">
+                  <div class="hero-stat-value" data-personal-stat="replies">0</div>
+                  <div class="hero-stat-label">Replies</div>
+                </div>
+                <div class="hero-stat">
+                  <div class="hero-stat-value" data-personal-stat="rating">—</div>
+                  <div class="hero-stat-label">Rating</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tabs -->
+          <div class="account-layout">
+            <aside class="account-tabs">
+              <button class="account-tab active" data-account-tab="profile">
+                <i data-lucide="user"></i><span>Profile</span>
+              </button>
+              <button class="account-tab" data-account-tab="security">
+                <i data-lucide="shield"></i><span>Security</span>
+                <span class="tab-badge">!</span>
+              </button>
+              <button class="account-tab" data-account-tab="notifications">
+                <i data-lucide="bell"></i><span>Notifications</span>
+              </button>
+              <button class="account-tab" data-account-tab="activity">
+                <i data-lucide="activity"></i><span>Activity</span>
+              </button>
+              <button class="account-tab" data-account-tab="integrations">
+                <i data-lucide="plug-2"></i><span>Integrations</span>
+              </button>
+              <button class="account-tab danger" data-account-tab="danger">
+                <i data-lucide="alert-octagon"></i><span>Danger Zone</span>
+              </button>
+            </aside>
+
+            <div class="account-content">
+              <!-- ===== PROFILE TAB ===== -->
+              <div class="account-pane active" data-account-pane="profile">
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <h3>Public Profile</h3>
+                      <div class="card-sub">How others see you across the platform</div>
+                    </div>
+                    <div class="save-indicator" id="save-indicator">
+                      <i data-lucide="check-circle-2"></i>
+                      <span>All changes saved</span>
+                    </div>
+                  </div>
+
+                  <div class="form-grid">
+                    <div class="form-field">
+                      <label>Display name</label>
+                      <input type="text" id="profile-name" placeholder="Your name" />
+                      <div class="field-hint">This will be displayed across the dashboard</div>
+                    </div>
+                    <div class="form-field">
+                      <label>Username</label>
+                      <div class="input-wrap">
+                        <span class="prefix">@</span>
+                        <input type="text" id="profile-username" placeholder="username" />
+                      </div>
+                      <div class="field-hint">Unique identifier for mentions</div>
+                    </div>
+                    <div class="form-field full">
+                      <label>Email</label>
+                      <div class="input-wrap readonly">
+                        <i data-lucide="mail"></i>
+                        <input type="email" id="profile-email" readonly />
+                        <span class="verified-pill" id="email-verified-pill">
+                          <i data-lucide="check"></i> Verified
+                        </span>
+                      </div>
+                    </div>
+                    <div class="form-field">
+                      <label>Phone</label>
+                      <div class="input-wrap">
+                        <i data-lucide="phone"></i>
+                        <input type="tel" id="profile-phone" placeholder="+20 100 000 0000" />
+                      </div>
+                    </div>
+                    <div class="form-field">
+                      <label>Location</label>
+                      <div class="input-wrap">
+                        <i data-lucide="map-pin"></i>
+                        <input type="text" id="profile-location" placeholder="City, Country" />
+                      </div>
+                    </div>
+                    <div class="form-field">
+                      <label>Website</label>
+                      <div class="input-wrap">
+                        <i data-lucide="link"></i>
+                        <input type="url" id="profile-website" placeholder="https://yoursite.com" />
+                      </div>
+                    </div>
+                    <div class="form-field">
+                      <label>Timezone</label>
+                      <div class="input-wrap">
+                        <i data-lucide="clock"></i>
+                        <select id="profile-timezone">
+                          <option value="Africa/Cairo">Africa/Cairo (GMT+2)</option>
+                          <option value="Europe/London">Europe/London (GMT+0)</option>
+                          <option value="America/New_York">America/New_York (GMT-5)</option>
+                          <option value="America/Los_Angeles">America/Los_Angeles (GMT-8)</option>
+                          <option value="Asia/Dubai">Asia/Dubai (GMT+4)</option>
+                          <option value="Asia/Riyadh">Asia/Riyadh (GMT+3)</option>
+                          <option value="Asia/Tokyo">Asia/Tokyo (GMT+9)</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="form-field full">
+                      <label>Bio</label>
+                      <textarea id="profile-bio" rows="3" placeholder="Tell us a bit about yourself…" maxlength="280"></textarea>
+                      <div class="field-hint"><span id="bio-count">0</span>/280</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <h3>Social Links</h3>
+                      <div class="card-sub">Connect your accounts to enrich your profile</div>
+                    </div>
+                  </div>
+                  <div class="social-grid">
+                    <div class="social-input">
+                      <div class="social-icon" style="background:linear-gradient(135deg,#333,#000)">
+                        <i data-lucide="github"></i>
+                      </div>
+                      <input type="text" id="social-github" placeholder="github.com/username" />
+                    </div>
+                    <div class="social-input">
+                      <div class="social-icon" style="background:linear-gradient(135deg,#1da1f2,#0d8ddc)">
+                        <i data-lucide="twitter"></i>
+                      </div>
+                      <input type="text" id="social-twitter" placeholder="@handle" />
+                    </div>
+                    <div class="social-input">
+                      <div class="social-icon" style="background:linear-gradient(135deg,#5865f2,#404eed)">
+                        <i data-lucide="message-circle"></i>
+                      </div>
+                      <input type="text" id="social-discord" placeholder="username#0000" />
+                    </div>
+                    <div class="social-input">
+                      <div class="social-icon" style="background:linear-gradient(135deg,#e4405f,#fcaf45)">
+                        <i data-lucide="instagram"></i>
+                      </div>
+                      <input type="text" id="social-instagram" placeholder="@handle" />
+                    </div>
+                    <div class="social-input">
+                      <div class="social-icon" style="background:linear-gradient(135deg,#0a66c2,#004182)">
+                        <i data-lucide="linkedin"></i>
+                      </div>
+                      <input type="text" id="social-linkedin" placeholder="in/username" />
+                    </div>
+                    <div class="social-input">
+                      <div class="social-icon" style="background:linear-gradient(135deg,#ff0000,#cc0000)">
+                        <i data-lucide="youtube"></i>
+                      </div>
+                      <input type="text" id="social-youtube" placeholder="@channel" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ===== SECURITY TAB ===== -->
+              <div class="account-pane" data-account-pane="security" hidden>
+                <!-- Password -->
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <h3>Password</h3>
+                      <div class="card-sub">Last changed <span id="pwd-last-changed">never</span></div>
+                    </div>
+                  </div>
+                  <div class="form-grid">
+                    <div class="form-field full">
+                      <label>Current password</label>
+                      <div class="input-wrap">
+                        <i data-lucide="lock"></i>
+                        <input type="password" id="pwd-current" placeholder="Enter current password" />
+                        <button type="button" class="suffix-btn" data-toggle-pwd="pwd-current">
+                          <i data-lucide="eye"></i>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="form-field">
+                      <label>New password</label>
+                      <div class="input-wrap">
+                        <i data-lucide="key"></i>
+                        <input type="password" id="pwd-new" placeholder="Choose a strong password" />
+                        <button type="button" class="suffix-btn" data-toggle-pwd="pwd-new">
+                          <i data-lucide="eye"></i>
+                        </button>
+                      </div>
+                      <div class="pwd-strength" id="pwd-strength">
+                        <div class="pwd-strength-bar"><div class="pwd-strength-fill" id="pwd-strength-fill"></div></div>
+                        <div class="pwd-strength-label" id="pwd-strength-label">Enter a password</div>
+                      </div>
+                    </div>
+                    <div class="form-field">
+                      <label>Confirm new password</label>
+                      <div class="input-wrap">
+                        <i data-lucide="key"></i>
+                        <input type="password" id="pwd-confirm" placeholder="Repeat new password" />
+                        <button type="button" class="suffix-btn" data-toggle-pwd="pwd-confirm">
+                          <i data-lucide="eye"></i>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="form-actions">
+                    <button class="btn-primary" id="btn-change-password">
+                      <i data-lucide="shield-check"></i><span>Update password</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 2FA -->
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <h3>Two-Factor Authentication</h3>
+                      <div class="card-sub">Add an extra layer of security to your account</div>
+                    </div>
+                    <span class="status-pill sm status-off" id="tfa-status">
+                      <span class="dot"></span> Disabled
+                    </span>
+                  </div>
+                  <div class="tfa-options">
+                    <div class="tfa-option">
+                      <div class="tfa-icon"><i data-lucide="smartphone"></i></div>
+                      <div class="tfa-info">
+                        <div class="tfa-name">Authenticator App</div>
+                        <div class="tfa-desc">Use Google Authenticator, Authy, or 1Password</div>
+                      </div>
+                      <label class="switch">
+                        <input type="checkbox" id="tfa-app">
+                        <span class="switch-slider"></span>
+                      </label>
+                    </div>
+                    <div class="tfa-option">
+                      <div class="tfa-icon"><i data-lucide="message-square"></i></div>
+                      <div class="tfa-info">
+                        <div class="tfa-name">SMS Verification</div>
+                        <div class="tfa-desc">Receive codes via text message</div>
+                      </div>
+                      <label class="switch">
+                        <input type="checkbox" id="tfa-sms">
+                        <span class="switch-slider"></span>
+                      </label>
+                    </div>
+                    <div class="tfa-option">
+                      <div class="tfa-icon"><i data-lucide="mail"></i></div>
+                      <div class="tfa-info">
+                        <div class="tfa-name">Email Verification</div>
+                        <div class="tfa-desc">Receive codes via email</div>
+                      </div>
+                      <label class="switch">
+                        <input type="checkbox" id="tfa-email" checked>
+                        <span class="switch-slider"></span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Active Sessions -->
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <h3>Active Sessions</h3>
+                      <div class="card-sub">Devices currently logged in to your account</div>
+                    </div>
+                    <button class="btn-danger sm" id="btn-signout-all">
+                      <i data-lucide="log-out"></i><span>Sign out all</span>
+                    </button>
+                  </div>
+                  <div class="sessions-list" id="sessions-list">
+                    <div class="session-item current">
+                      <div class="session-icon"><i data-lucide="monitor"></i></div>
+                      <div class="session-info">
+                        <div class="session-name">This device</div>
+                        <div class="session-meta">
+                          <span><i data-lucide="globe"></i> <span id="sess-browser">—</span></span>
+                          <span><i data-lucide="map-pin"></i> <span id="sess-location">—</span></span>
+                          <span class="session-current">● Active now</span>
+                        </div>
+                      </div>
+                      <span class="session-pill">Current</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- API Tokens -->
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <h3>API Tokens</h3>
+                      <div class="card-sub">Personal access tokens for the Ledo API</div>
+                    </div>
+                    <button class="btn-ghost" id="btn-new-token">
+                      <i data-lucide="plus"></i> Generate new
+                    </button>
+                  </div>
+                  <div class="tokens-list" id="tokens-list">
+                    <div class="token-item">
+                      <div class="token-icon"><i data-lucide="key"></i></div>
+                      <div class="token-info">
+                        <div class="token-name">Dashboard CLI</div>
+                        <div class="token-meta">
+                          <span class="token-mono">ledo_pat_************************a8f2</span>
+                          <span>Created 12 days ago</span>
+                          <span>Last used 2h ago</span>
+                        </div>
+                      </div>
+                      <button class="row-btn" title="Revoke">
+                        <i data-lucide="trash-2"></i>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ===== NOTIFICATIONS TAB ===== -->
+              <div class="account-pane" data-account-pane="notifications" hidden>
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <h3>Channels</h3>
+                      <div class="card-sub">Where you want to be notified</div>
+                    </div>
+                  </div>
+                  <div class="notif-matrix">
+                    <div class="notif-matrix-head">
+                      <div></div>
+                      <div class="matrix-col">Email</div>
+                      <div class="matrix-col">In-app</div>
+                      <div class="matrix-col">Push</div>
+                    </div>
+                    <div class="notif-row">
+                      <div class="notif-row-label">New tickets</div>
+                      <label class="check"><input type="checkbox" data-notif="newTicket" data-chan="email" checked><span class="check-box"></span></label>
+                      <label class="check"><input type="checkbox" data-notif="newTicket" data-chan="inapp" checked><span class="check-box"></span></label>
+                      <label class="check"><input type="checkbox" data-notif="newTicket" data-chan="push" checked><span class="check-box"></span></label>
+                    </div>
+                    <div class="notif-row">
+                      <div class="notif-row-label">Replies & mentions</div>
+                      <label class="check"><input type="checkbox" data-notif="reply" data-chan="email" checked><span class="check-box"></span></label>
+                      <label class="check"><input type="checkbox" data-notif="reply" data-chan="inapp" checked><span class="check-box"></span></label>
+                      <label class="check"><input type="checkbox" data-notif="reply" data-chan="push"><span class="check-box"></span></label>
+                    </div>
+                    <div class="notif-row">
+                      <div class="notif-row-label">Crash reports</div>
+                      <label class="check"><input type="checkbox" data-notif="crash" data-chan="email" checked><span class="check-box"></span></label>
+                      <label class="check"><input type="checkbox" data-notif="crash" data-chan="inapp" checked><span class="check-box"></span></label>
+                      <label class="check"><input type="checkbox" data-notif="crash" data-chan="push" checked><span class="check-box"></span></label>
+                    </div>
+                    <div class="notif-row">
+                      <div class="notif-row-label">Weekly digest</div>
+                      <label class="check"><input type="checkbox" data-notif="digest" data-chan="email" checked><span class="check-box"></span></label>
+                      <label class="check"><input type="checkbox" data-notif="digest" data-chan="inapp"><span class="check-box"></span></label>
+                      <label class="check"><input type="checkbox" data-notif="digest" data-chan="push"><span class="check-box"></span></label>
+                    </div>
+                    <div class="notif-row">
+                      <div class="notif-row-label">Product updates</div>
+                      <label class="check"><input type="checkbox" data-notif="product" data-chan="email"><span class="check-box"></span></label>
+                      <label class="check"><input type="checkbox" data-notif="product" data-chan="inapp" checked><span class="check-box"></span></label>
+                      <label class="check"><input type="checkbox" data-notif="product" data-chan="push"><span class="check-box"></span></label>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <h3>Quiet Hours</h3>
+                      <div class="card-sub">Pause non-urgent notifications during these hours</div>
+                    </div>
+                    <label class="switch">
+                      <input type="checkbox" id="quiet-hours-toggle" checked>
+                      <span class="switch-slider"></span>
+                    </label>
+                  </div>
+                  <div class="quiet-hours">
+                    <div class="time-input">
+                      <label>From</label>
+                      <input type="time" id="quiet-from" value="22:00" />
+                    </div>
+                    <div class="time-arrow"><i data-lucide="arrow-right"></i></div>
+                    <div class="time-input">
+                      <label>To</label>
+                      <input type="time" id="quiet-to" value="08:00" />
+                    </div>
+                    <div class="time-input">
+                      <label>Timezone</label>
+                      <select id="quiet-tz">
+                        <option>Local time</option>
+                        <option>UTC</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ===== ACTIVITY TAB ===== -->
+              <div class="account-pane" data-account-pane="activity" hidden>
+                <div class="grid-2">
+                  <div class="card">
+                    <div class="card-head">
+                      <h3>This week</h3>
+                    </div>
+                    <div class="mini-stats">
+                      <div class="mini-stat">
+                        <div class="mini-stat-icon" style="background:var(--gradient)"><i data-lucide="ticket"></i></div>
+                        <div>
+                          <div class="mini-stat-value" id="week-handled">0</div>
+                          <div class="mini-stat-label">Tickets handled</div>
+                        </div>
+                      </div>
+                      <div class="mini-stat">
+                        <div class="mini-stat-icon" style="background:linear-gradient(135deg,#10b981,#059669)"><i data-lucide="check"></i></div>
+                        <div>
+                          <div class="mini-stat-value" id="week-resolved">0</div>
+                          <div class="mini-stat-label">Resolved</div>
+                        </div>
+                      </div>
+                      <div class="mini-stat">
+                        <div class="mini-stat-icon" style="background:linear-gradient(135deg,#06b6d4,#6366f1)"><i data-lucide="message-square"></i></div>
+                        <div>
+                          <div class="mini-stat-value" id="week-replies">0</div>
+                          <div class="mini-stat-label">Replies sent</div>
+                        </div>
+                      </div>
+                      <div class="mini-stat">
+                        <div class="mini-stat-icon" style="background:linear-gradient(135deg,#f59e0b,#ef4444)"><i data-lucide="zap"></i></div>
+                        <div>
+                          <div class="mini-stat-value" id="week-avg">—</div>
+                          <div class="mini-stat-label">Avg. response</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="card">
+                    <div class="card-head">
+                      <h3>Activity</h3>
+                    </div>
+                    <div class="chart-wrap" style="min-height:200px">
+                      <canvas id="chart-my-activity"></canvas>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <h3>Recent Actions</h3>
+                      <div class="card-sub">Your latest activity on the dashboard</div>
+                    </div>
+                  </div>
+                  <div class="activity-feed" id="my-activity-feed">
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ===== INTEGRATIONS TAB ===== -->
+              <div class="account-pane" data-account-pane="integrations" hidden>
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <h3>Connected Apps</h3>
+                      <div class="card-sub">Supercharge your workflow with third-party tools</div>
+                    </div>
+                  </div>
+                  <div class="integrations-grid">
+                    <div class="integration-card" data-integration="slack">
+                      <div class="integration-head">
+                        <div class="integration-icon" style="background:linear-gradient(135deg,#4a154b,#ecb22e)">
+                          <i data-lucide="message-circle"></i>
+                        </div>
+                        <label class="switch">
+                          <input type="checkbox" data-integration-toggle="slack">
+                          <span class="switch-slider"></span>
+                        </label>
+                      </div>
+                      <div class="integration-name">Slack</div>
+                      <div class="integration-desc">Get notified in your Slack channels when new tickets arrive.</div>
+                      <div class="integration-status">Not connected</div>
+                    </div>
+                    <div class="integration-card" data-integration="discord">
+                      <div class="integration-head">
+                        <div class="integration-icon" style="background:linear-gradient(135deg,#5865f2,#404eed)">
+                          <i data-lucide="hash"></i>
+                        </div>
+                        <label class="switch">
+                          <input type="checkbox" data-integration-toggle="discord">
+                          <span class="switch-slider"></span>
+                        </label>
+                      </div>
+                      <div class="integration-name">Discord</div>
+                      <div class="integration-desc">Forward ticket updates to your Discord server via webhook.</div>
+                      <div class="integration-status">Not connected</div>
+                    </div>
+                    <div class="integration-card" data-integration="github">
+                      <div class="integration-head">
+                        <div class="integration-icon" style="background:linear-gradient(135deg,#333,#000)">
+                          <i data-lucide="github"></i>
+                        </div>
+                        <label class="switch">
+                          <input type="checkbox" data-integration-toggle="github">
+                          <span class="switch-slider"></span>
+                        </label>
+                      </div>
+                      <div class="integration-name">GitHub</div>
+                      <div class="integration-desc">Link crash reports to GitHub issues automatically.</div>
+                      <div class="integration-status">Not connected</div>
+                    </div>
+                    <div class="integration-card" data-integration="zapier">
+                      <div class="integration-head">
+                        <div class="integration-icon" style="background:linear-gradient(135deg,#ff4a00,#fc6a00)">
+                          <i data-lucide="zap"></i>
+                        </div>
+                        <label class="switch">
+                          <input type="checkbox" data-integration-toggle="zapier">
+                          <span class="switch-slider"></span>
+                        </label>
+                      </div>
+                      <div class="integration-name">Zapier</div>
+                      <div class="integration-desc">Connect to 5,000+ apps without writing a line of code.</div>
+                      <div class="integration-status">Not connected</div>
+                    </div>
+                    <div class="integration-card" data-integration="webhook">
+                      <div class="integration-head">
+                        <div class="integration-icon" style="background:var(--gradient)">
+                          <i data-lucide="webhook"></i>
+                        </div>
+                        <label class="switch">
+                          <input type="checkbox" data-integration-toggle="webhook">
+                          <span class="switch-slider"></span>
+                        </label>
+                      </div>
+                      <div class="integration-name">Custom Webhook</div>
+                      <div class="integration-desc">POST events to any URL you control.</div>
+                      <div class="integration-status">Not connected</div>
+                    </div>
+                    <div class="integration-card" data-integration="telegram">
+                      <div class="integration-head">
+                        <div class="integration-icon" style="background:linear-gradient(135deg,#229ed9,#0088cc)">
+                          <i data-lucide="send"></i>
+                        </div>
+                        <label class="switch">
+                          <input type="checkbox" data-integration-toggle="telegram">
+                          <span class="switch-slider"></span>
+                        </label>
+                      </div>
+                      <div class="integration-name">Telegram</div>
+                      <div class="integration-desc">Get instant push notifications in Telegram.</div>
+                      <div class="integration-status">Not connected</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ===== DANGER ZONE ===== -->
+              <div class="account-pane" data-account-pane="danger" hidden>
+                <div class="card danger-zone">
+                  <div class="card-head">
+                    <div>
+                      <h3>Sign out everywhere</h3>
+                      <div class="card-sub">End all active sessions on every device</div>
+                    </div>
+                  </div>
+                  <p class="muted">This will sign you out of all devices except this one. You'll need to sign in again on each device.</p>
+                  <button class="btn-danger" id="btn-danger-signout-all">
+                    <i data-lucide="log-out"></i><span>Sign out of all devices</span>
+                  </button>
+                </div>
+
+                <div class="card danger-zone">
+                  <div class="card-head">
+                    <div>
+                      <h3>Reset dashboard preferences</h3>
+                      <div class="card-sub">Clear all local preferences, theme, compact mode, etc.</div>
+                    </div>
+                  </div>
+                  <p class="muted">Your account data will not be affected. This only resets your local UI preferences.</p>
+                  <button class="btn-danger" id="btn-danger-reset">
+                    <i data-lucide="refresh-ccw"></i><span>Reset preferences</span>
+                  </button>
+                </div>
+
+                <div class="card danger-zone critical">
+                  <div class="card-head">
+                    <div>
+                      <h3>Delete account</h3>
+                      <div class="card-sub">Permanently remove your admin account and all data</div>
+                    </div>
+                    <span class="critical-badge">
+                      <i data-lucide="alert-triangle"></i> Irreversible
+                    </span>
+                  </div>
+                  <p class="muted">This action cannot be undone. All your data, preferences, and access will be permanently removed.</p>
+                  <div class="form-field">
+                    <label>Type <strong>DELETE</strong> to confirm</label>
+                    <input type="text" id="delete-confirm" placeholder="DELETE" />
+                  </div>
+                  <button class="btn-critical" id="btn-danger-delete" disabled>
+                    <i data-lucide="trash-2"></i><span>Delete my account forever</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== SETTINGS ===== -->
+        <div class="route" data-route="settings" hidden>
+          <div class="card">
+            <div class="card-head">
+              <h3>Profile</h3>
+            </div>
+            <div class="profile-row">
+              <div class="admin-avatar xl" id="settings-avatar">A</div>
+              <div>
+                <div class="admin-name lg" id="settings-name">Admin</div>
+                <div class="muted" id="settings-email">—</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head">
+              <h3>Preferences</h3>
+            </div>
+            <div class="settings-grid">
+              <div class="setting">
+                <div>
+                  <div class="setting-name">Theme</div>
+                  <div class="setting-desc">Light or dark appearance</div>
+                </div>
+                <div class="seg" id="theme-seg">
+                  <button class="seg-btn" data-theme="light"><i data-lucide="sun"></i> Light</button>
+                  <button class="seg-btn active" data-theme="dark"><i data-lucide="moon"></i> Dark</button>
+                </div>
+              </div>
+              <div class="setting">
+                <div>
+                  <div class="setting-name">Compact mode</div>
+                  <div class="setting-desc">Reduce spacing in tables</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="compact-mode">
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+              <div class="setting">
+                <div>
+                  <div class="setting-name">Animations</div>
+                  <div class="setting-desc">Enable micro-interactions</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="anim-toggle" checked>
+                  <span class="switch-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="card danger-zone">
+            <div class="card-head">
+              <h3>Session</h3>
+            </div>
+            <p class="muted">Sign out of this admin account on this device.</p>
+            <button class="btn-danger" id="btn-logout-2">
+              <i data-lucide="log-out"></i>
+              <span>Sign out</span>
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ============ TICKET DETAIL MODAL ============ -->
+  <div class="modal" id="ticket-modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-body">
+      <div class="modal-head">
+        <div>
+          <div class="modal-eyebrow">
+            <i data-lucide="ticket"></i>
+            <span>Ticket</span>
+            <span class="status-pill sm" id="modal-status-pill">—</span>
+          </div>
+          <h3 id="modal-subject">—</h3>
+        </div>
+        <button class="icon-btn" data-close aria-label="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+
+      <div class="modal-meta">
+        <div class="meta-item">
+          <div class="meta-label">From</div>
+          <div class="meta-value" id="modal-email">—</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">Created</div>
+          <div class="meta-value" id="modal-time">—</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">User ID</div>
+          <div class="meta-value mono" id="modal-userid">—</div>
+        </div>
+      </div>
+
+      <div class="modal-message-wrap">
+        <div class="meta-label">Message</div>
+        <div class="modal-message" id="modal-message">—</div>
+      </div>
+
+      <div class="modal-section">
+        <div class="meta-label">Update status</div>
+        <div class="status-actions">
+          <button class="status-btn" data-status="open">
+            <span class="dot dot-open"></span> Open
+          </button>
+          <button class="status-btn" data-status="in_progress">
+            <span class="dot dot-progress"></span> In Progress
+          </button>
+          <button class="status-btn" data-status="resolved">
+            <span class="dot dot-resolved"></span> Resolved
+          </button>
+        </div>
+      </div>
+
+      <div class="modal-section">
+        <div class="reply-head">
+          <div class="meta-label">Reply to user</div>
+          <div class="muted sm">Sent to <span id="reply-target">—</span></div>
+        </div>
+        <textarea id="modal-reply" placeholder="Write a clear, helpful reply..."></textarea>
+        <div class="reply-actions">
+          <button class="btn-ghost" id="btn-reply-template">
+            <i data-lucide="sparkles"></i> Use template
+          </button>
+          <button class="btn-primary" id="btn-send-reply">
+            <i data-lucide="send"></i>
+            <span>Send reply</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ NOTIFICATIONS DRAWER ============ -->
+  <div class="drawer" id="notif-drawer" hidden>
+    <div class="drawer-backdrop" data-close-drawer></div>
+    <div class="drawer-body">
+      <div class="drawer-head">
+        <h3>Notifications</h3>
+        <button class="icon-btn" data-close-drawer aria-label="Close">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div id="notif-list" class="notif-list">
+        <div class="muted center pad">No new notifications</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ TOASTS ============ -->
+  <div id="toast-root" class="toast-root" aria-live="polite" aria-atomic="true"></div>
+
+  <script type="module" src="app.js"></script>
 </body>
 </html>
