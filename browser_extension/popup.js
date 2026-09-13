@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     checkAppStatus();
     setupTabs();
     getCurrentTabInfo();
+    setupSettings();
     
     // Poll status every 3 seconds
     setInterval(checkAppStatus, 3000);
@@ -385,4 +386,34 @@ function renderSniffedMedia(mediaItems) {
         
         listEl.appendChild(div);
     });
+}
+
+// --- Settings Logic ---
+function setupSettings() {
+    const toggle = document.getElementById('toggle-intercept');
+    const slider = document.getElementById('toggle-slider');
+    
+    chrome.storage.local.get(['intercept_enabled'], (res) => {
+        const isEnabled = res.intercept_enabled !== false; // Default true
+        toggle.checked = isEnabled;
+        updateSlider(isEnabled);
+    });
+    
+    toggle.addEventListener('change', (e) => {
+        const isEnabled = e.target.checked;
+        chrome.storage.local.set({ intercept_enabled: isEnabled }, () => {
+            updateSlider(isEnabled);
+            showToast(isEnabled ? "Interception Enabled" : "Interception Disabled");
+        });
+    });
+    
+    function updateSlider(isEnabled) {
+        if (isEnabled) {
+            slider.style.transform = 'translateX(18px)';
+            slider.style.backgroundColor = 'var(--primary)';
+        } else {
+            slider.style.transform = 'translateX(0)';
+            slider.style.backgroundColor = 'var(--text-muted)';
+        }
+    }
 }

@@ -327,7 +327,7 @@ async function loadAllData() {
 
 function subscribeTickets() {
   if (!state.currentUser) return;
-  const q = query(collection(db, "support_tickets"), orderBy("createdAt", "desc"), limit(500));
+  const q = query(collection(db, "chats"), orderBy("lastUpdated", "desc"), limit(500));
   const unsub = onSnapshot(
     q,
     (snapshot) => {
@@ -649,7 +649,7 @@ function renderCrashes() {
         <td><div class="row-time">${fmt.timeAgo(c.createdAt)}</div></td>
         <td><div class="row-email">${fmt.escape(c.email || "—")}</div></td>
         <td><div class="row-subject">${fmt.escape(c.subject || "—")}</div></td>
-        <td><div class="row-msg" style="max-width:340px">${fmt.escape(c.message || "—")}</div></td>
+        <td><div class="row-msg" style="max-width:340px; cursor:pointer; transition: all 0.2s;" title="Click to expand/collapse" onclick="if(this.style.whiteSpace==='pre-wrap'){this.style.whiteSpace='nowrap';this.style.maxWidth='340px'}else{this.style.whiteSpace='pre-wrap';this.style.maxWidth='none'}">${fmt.escape(c.message || "—")}</div></td>
       </tr>
     `
     )
@@ -963,6 +963,8 @@ function renderAllCharts() {
   renderDailyChart();
 }
 
+let chatUnsub = null;
+
 // ============== TICKET MODAL ==============
 function openTicketModal(ticket, focusReply = false) {
   state.selectedTicket = ticket;
@@ -970,9 +972,43 @@ function openTicketModal(ticket, focusReply = false) {
   $("#modal-email").textContent = ticket.email || "—";
   $("#modal-time").textContent = fmt.date(ticket.createdAt);
   $("#modal-userid").textContent = ticket.userId || "guest";
-  $("#modal-message").textContent = ticket.message || "—";
   $("#reply-target").textContent = ticket.email || "user";
   $("#modal-reply").value = "";
+
+  const chatContainer = $("#modal-chat-history");
+  chatContainer.innerHTML = `<div class="muted center pad" style="flex:1;display:flex;align-items:center;justify-content:center;">Loading conversation...</div>`;
+
+  if (chatUnsub) {
+    chatUnsub();
+    chatUnsub = null;
+  }
+
+  const userId = ticket.userId || ticket.id;
+  chatUnsub = onSnapshot(
+    query(collection(db, `chats/${userId}/messages`), orderBy("createdAt", "asc")),
+    (snapshot) => {
+      if (snapshot.empty) {
+        chatContainer.innerHTML = `<div class="muted center pad" style="flex:1;display:flex;align-items:center;justify-content:center;">No messages found.</div>`;
+        return;
+      }
+      chatContainer.innerHTML = snapshot.docs.map(doc => {
+        const msg = doc.data();
+        const type = msg.isAdmin ? "admin" : "user";
+        const time = fmt.timeAgo(msg.createdAt);
+        return `
+          <div class="chat-msg ${type}">
+            <div>${fmt.escape(msg.text || "")}</div>
+            <div class="chat-msg-time">${time}</div>
+          </div>
+        `;
+      }).join("");
+      chatContainer.scrollTop = chatContainer.scrollHeight;
+    },
+    (err) => {
+      console.error("Chat fetch error", err);
+      chatContainer.innerHTML = `<div class="muted center pad" style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--error);">Failed to load chat history.</div>`;
+    }
+  );
 
   // Status pill
   const status = ticket.status || "open";
@@ -995,6 +1031,10 @@ function openTicketModal(ticket, focusReply = false) {
 }
 
 function closeTicketModal() {
+  if (chatUnsub) {
+    chatUnsub();
+    chatUnsub = null;
+  }
   $("#ticket-modal").hidden = true;
   state.selectedTicket = null;
 }
@@ -1002,7 +1042,7 @@ function closeTicketModal() {
 async function updateTicketStatus(status) {
   if (!state.selectedTicket) return;
   try {
-    await updateDoc(doc(db, "support_tickets", state.selectedTicket.id), {
+    await updateDoc(doc(db, "chats", state.selectedTicket.id), {
       status,
       updatedAt: serverTimestamp(),
     });
@@ -1032,14 +1072,15 @@ async function sendReply() {
   btn.disabled = true;
   btn.querySelector("span").textContent = "Sending…";
   try {
-    await addDoc(collection(db, `users/${state.selectedTicket.userId}/messages`), {
+    const userId = state.selectedTicket.userId || state.selectedTicket.id;
+    await addDoc(collection(db, `chats/${userId}/messages`), {
       text,
-      fromAdmin: true,
+      isAdmin: true,
       createdAt: serverTimestamp(),
     });
     // mark ticket as in_progress if open
     if ((state.selectedTicket.status || "open") === "open") {
-      await updateDoc(doc(db, "support_tickets", state.selectedTicket.id), {
+      await updateDoc(doc(db, "chats", state.selectedTicket.id), {
         status: "in_progress",
         updatedAt: serverTimestamp(),
       });
@@ -1345,6 +1386,81 @@ function wireProfileForm() {
     el.addEventListener("change", save);
     el.addEventListener("blur", save);
   });
+
+  // Live preview sync + completeness meter
+  wireAccountPreview();
+}
+
+function wireAccountPreview() {
+  const map = {
+    "profile-name": ["#acct-preview-name", (v) => v || "Admin"],
+    "profile-username": ["#acct-preview-handle", (v) => v ? `@${v}` : "@admin"],
+    "profile-bio": ["#acct-preview-bio", (v) => v || "Tell others a bit about yourself…"],
+  };
+  Object.entries(map).forEach(([src, [sel, fmt]]) => {
+    const el = document.getElementById(src);
+    const target = document.querySelector(sel);
+    if (!el || !target) return;
+    const update = () => { target.textContent = fmt(el.value); };
+    el.addEventListener("input", update);
+    update();
+  });
+
+  // Sync preview avatar with account avatar
+  const acctAvatar = document.getElementById("account-avatar");
+  const previewAvatar = document.getElementById("acct-preview-avatar");
+  if (acctAvatar && previewAvatar) {
+    const updateAvatar = () => { previewAvatar.textContent = acctAvatar.textContent || "A"; };
+    new MutationObserver(updateAvatar).observe(acctAvatar, { childList: true, characterData: true, subtree: true });
+    updateAvatar();
+  }
+
+  // Stats sync
+  const statMap = {
+    handled: "#acct-preview-handled",
+    resolved: "#acct-preview-resolved",
+    rating: "#acct-preview-rating",
+  };
+  Object.entries(statMap).forEach(([key, sel]) => {
+    const src = document.querySelector(`[data-personal-stat="${key}"]`);
+    const tgt = document.querySelector(sel);
+    if (!src || !tgt) return;
+    const update = () => { tgt.textContent = src.textContent || "0"; };
+    new MutationObserver(update).observe(src, { childList: true, characterData: true, subtree: true });
+    update();
+  });
+
+  // Completeness meter
+  const required = [
+    { id: "profile-name", weight: 20 },
+    { id: "profile-username", weight: 15 },
+    { id: "profile-bio", weight: 20 },
+    { id: "profile-phone", weight: 10 },
+    { id: "profile-location", weight: 10 },
+    { id: "profile-website", weight: 10 },
+    { id: "profile-timezone", weight: 10 },
+  ];
+  const fill = document.getElementById("acct-progress-fill");
+  const valEl = document.getElementById("acct-completeness-value");
+  if (!fill || !valEl) return;
+
+  const recompute = () => {
+    let score = 0;
+    let total = 0;
+    required.forEach(({ id, weight }) => {
+      total += weight;
+      const el = document.getElementById(id);
+      if (el && el.value && el.value.toString().trim()) score += weight;
+    });
+    const pct = total ? Math.round((score / total) * 100) : 0;
+    fill.style.width = pct + "%";
+    valEl.textContent = pct + "%";
+  };
+  required.forEach(({ id }) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", recompute);
+  });
+  recompute();
 }
 
 function wireSecurityForm() {

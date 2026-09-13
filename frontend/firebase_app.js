@@ -129,22 +129,51 @@
             }
         },
 
-        // Submit Support Ticket
-        submitSupportTicket: async (subject, message) => {
+        // Chat System
+        sendChatMessage: async (messageText) => {
             if (!auth.currentUser) return { success: false, error: "Not logged in" };
             try {
-                await db.collection("support_tickets").add({
-                    userId: auth.currentUser.uid,
+                const uid = auth.currentUser.uid;
+                const chatRef = db.collection("chats").doc(uid);
+                
+                // Ensure chat doc exists
+                await chatRef.set({
+                    userId: uid,
                     email: auth.currentUser.email || 'anon@local',
-                    subject: subject,
-                    message: message,
-                    createdAt: new Date().toISOString(),
-                    status: 'open'
+                    lastUpdated: firebase.firestore.FieldValue.serverTimestamp(),
+                    unreadAdmin: true, // admin needs to read this
+                    unreadUser: false
+                }, { merge: true });
+
+                // Add message
+                await chatRef.collection("messages").add({
+                    sender: uid,
+                    text: messageText,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    isAdmin: false
                 });
                 return { success: true };
             } catch (error) {
                 return { success: false, error: error.message };
             }
+        },
+
+        listenToChat: (callback) => {
+            if (!auth.currentUser) return null;
+            return db.collection("chats")
+                .doc(auth.currentUser.uid)
+                .collection("messages")
+                .orderBy("createdAt", "asc")
+                .onSnapshot(
+                    (snapshot) => {
+                        const messages = [];
+                        snapshot.forEach((doc) => {
+                            messages.push({ id: doc.id, ...doc.data() });
+                        });
+                        callback(messages);
+                    },
+                    (error) => console.error("Chat listen error:", error)
+                );
         },
 
         // Listen to Inbox Messages
@@ -171,6 +200,25 @@
         // Auth state listener
         onAuthStateChanged: (callback) => {
             auth.onAuthStateChanged(callback);
+        },
+
+        // Upload Crash Report
+        uploadCrashReport: async (errorMsg, stack, context = {}) => {
+            try {
+                await db.collection("crash_reports").add({
+                    message: errorMsg,
+                    stack: stack || null,
+                    context: context,
+                    userId: auth.currentUser ? auth.currentUser.uid : 'anonymous',
+                    email: auth.currentUser ? auth.currentUser.email : 'anon@local',
+                    createdAt: new Date().toISOString(),
+                    userAgent: navigator.userAgent
+                });
+                return { success: true };
+            } catch (error) {
+                console.error("Failed to upload crash report:", error);
+                return { success: false, error: error.message };
+            }
         }
     };
 

@@ -56,8 +56,30 @@ def get_category_dir(filename):
 active_downloads = {}
 download_semaphore = threading.Semaphore(2)
 
+GLOBAL_SPEED_LIMIT_KBPS = 0  # 0 = unlimited
+
+def set_speed_limit(kbps: int):
+    global GLOBAL_SPEED_LIMIT_KBPS
+    GLOBAL_SPEED_LIMIT_KBPS = max(0, int(kbps))
+    logger.info(f"Speed limit set to: {GLOBAL_SPEED_LIMIT_KBPS} KB/s")
+
+def get_speed_limit() -> int:
+    return GLOBAL_SPEED_LIMIT_KBPS
+
+def calculate_optimal_threads(total_size: int) -> int:
+    if total_size <= 0:
+        return 1
+    if total_size < 5 * 1024 * 1024:        # < 5MB
+        return 2
+    elif total_size < 50 * 1024 * 1024:    # < 50MB
+        return 4
+    elif total_size < 300 * 1024 * 1024:   # < 300MB
+        return 8
+    else:                                  # Large files
+        return 16
+
 class DownloadContext:
-    def __init__(self, download_id, url, on_update, save_path=None, quality="best", cookies=None, user_agent=None):
+    def __init__(self, download_id, url, on_update, save_path=None, quality="best", cookies=None, user_agent=None, referer=None):
         self.id = download_id
         self.url = url
         self.on_update = on_update
@@ -65,46 +87,49 @@ class DownloadContext:
         self.quality = quality
         self.cookies = cookies
         self.user_agent = user_agent
+        self.referer = referer
+        self.num_threads = 8
         self.stop_event = threading.Event()
         self.thread_stop_event = threading.Event()
         self.process = None
 
-def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, quality="best", cookies=None, user_agent=None):
+def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, quality="best", cookies=None, user_agent=None, referer=None, existing_id=None):
     if save_path:
         norm_path = os.path.normpath(save_path)
         if not os.path.isabs(norm_path):
             norm_path = os.path.join(BASE_DOWNLOAD_DIR, norm_path)
         norm_path = os.path.abspath(norm_path)
-        
-        base_abs = os.path.abspath(BASE_DOWNLOAD_DIR)
-        try:
-            common = os.path.commonpath([base_abs, norm_path])
-            if common != base_abs:
-                raise ValueError("Invalid save_path: Cannot save outside the base download directory.")
-        except ValueError:
-            # commonpath raises ValueError if paths are on different drives on Windows
-            raise ValueError("Invalid save_path: Cannot save outside the base download directory.")
-            
+        os.makedirs(norm_path, exist_ok=True)
         save_path = norm_path
 
-    download_id = str(uuid.uuid4())
-    logger.info(f"Preparing download {download_id} for URL: {url} | yt-dlp: {use_ytdlp} | Quality: {quality}")
+    if existing_id:
+        download_id = existing_id
+        logger.info(f"Resuming download {download_id} for URL: {url}")
+        db_rec = db.query(DownloadRecord).filter(DownloadRecord.id == download_id).first()
+        if db_rec:
+            db_rec.status = "starting"
+            db_rec.error_message = ""
+            db.commit()
+    else:
+        download_id = str(uuid.uuid4())
+        logger.info(f"Preparing download {download_id} for URL: {url} | yt-dlp: {use_ytdlp} | Quality: {quality}")
+        
+        db_rec = DownloadRecord(
+            id=download_id,
+            url=url,
+            is_yt_dlp=use_ytdlp,
+            status="starting",
+            filename="",
+            total_size=0,
+            downloaded=0,
+            speed=0,
+            progress=0.0,
+            created_at=time.time() * 1000
+        )
+        db.add(db_rec)
+        db.commit()
     
-    db_rec = DownloadRecord(
-        id=download_id,
-        url=url,
-        is_yt_dlp=use_ytdlp,
-        status="starting",
-        filename="",
-        total_size=0,
-        downloaded=0,
-        speed=0,
-        progress=0.0
-    )
-    db.add(db_rec)
-    db.commit()
-    
-    ctx = DownloadContext(download_id, url, on_update, save_path, quality, cookies, user_agent)
+    ctx = DownloadContext(download_id, url, on_update, save_path, quality, cookies, user_agent, referer)
     active_downloads[download_id] = ctx
     
     if use_ytdlp:
@@ -262,11 +287,21 @@ def _run_ytdlp(ctx: DownloadContext):
         'force_ipv4': True
     }
     
+    if GLOBAL_SPEED_LIMIT_KBPS > 0:
+        ydl_opts['ratelimit'] = GLOBAL_SPEED_LIMIT_KBPS * 1024
+    
+    if 'facebook.com' in ctx.url or 'fb.watch' in ctx.url:
+        ydl_opts['force_ipv4'] = False
+        ydl_opts['legacyserverconnect'] = True
+    
     if ctx.user_agent:
         ydl_opts['http_headers']['User-Agent'] = ctx.user_agent
         
     if ctx.cookies:
         ydl_opts['http_headers']['Cookie'] = ctx.cookies
+        
+    if ctx.referer:
+        ydl_opts['http_headers']['Referer'] = ctx.referer
     
     # NOTE: aria2c is NOT used as external downloader for yt-dlp because it
     # conflicts with progress hooks and causes [Errno 22] Invalid argument on
@@ -330,11 +365,12 @@ def _run_ytdlp(ctx: DownloadContext):
         if "Download paused/stopped by user" in str(e):
             logger.info(f"yt-dlp download {ctx.id} paused/stopped.")
             _update_db(ctx, status="paused")
+            # Do NOT clean up part files on pause so it can resume
         else:
             logger.exception(f"yt-dlp error for {ctx.id}: {e}")
             _update_db(ctx, status="error", error_message=str(e))
-        # Clean up temp files on error/pause
-        _cleanup_ytdlp_temps(video_dir)
+            # Clean up temp files only on hard error
+            _cleanup_ytdlp_temps(video_dir)
 
 async def _download_chunk_async(ctx, session, start, end, part_num, final_path, downloaded_list, total_size, start_time, lock, last_update_list):
     part_path = f"{final_path}.part{part_num}"
@@ -382,6 +418,11 @@ async def _download_chunk_async(ctx, session, start, end, part_num, final_path, 
                                 last_update_list[0] = now
                                 last_update_list[1] = downloaded_list[0]
                                 
+                        if GLOBAL_SPEED_LIMIT_KBPS > 0:
+                            # Throttle speed across chunks
+                            expected_time = len(chunk) / (GLOBAL_SPEED_LIMIT_KBPS * 1024 / max(1, ctx.num_threads))
+                            await asyncio.sleep(min(0.5, expected_time))
+                                
         return part_path
     except Exception as e:
         logger.error(f"Error in chunk {part_num} for {ctx.id}: {e}")
@@ -425,7 +466,6 @@ def _extract_filename(headers, original_url, final_url):
 async def _run_chunked_download_async(ctx: DownloadContext):
     logger.info(f"Starting async chunk download: {ctx.id}")
     _update_db(ctx, status="downloading")
-    num_threads = 16
     
     # Default browser-like headers for direct file downloads
     default_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
@@ -444,6 +484,8 @@ async def _run_chunked_download_async(ctx: DownloadContext):
             }
             if ctx.cookies:
                 headers['Cookie'] = ctx.cookies
+            if ctx.referer:
+                headers['Referer'] = ctx.referer
                 
             # Try HEAD first, fallback to GET range=0-0
             head_status = 0
@@ -507,6 +549,8 @@ async def _run_chunked_download_async(ctx: DownloadContext):
                 await _normal_download_async(ctx, session, final_path, total_size, headers)
                 return
 
+            num_threads = calculate_optimal_threads(total_size)
+            ctx.num_threads = num_threads
             chunk_size = total_size // num_threads
             downloaded = [0]
             lock = asyncio.Lock()
@@ -528,8 +572,7 @@ async def _run_chunked_download_async(ctx: DownloadContext):
             if ctx.stop_event.is_set():
                 logger.info(f"Download {ctx.id} paused.")
                 _update_db(ctx, status="paused")
-                # Clean up .part chunk files on pause
-                _cleanup_part_files(final_path, num_threads)
+                # DO NOT clean up .part files on pause so it can resume
                 return
                 
             for res in results:
@@ -537,14 +580,19 @@ async def _run_chunked_download_async(ctx: DownloadContext):
                     raise res
                     
             logger.info(f"Merging chunks for {ctx.id}")
+            _update_db(ctx, status="processing")
             async with aiofiles.open(final_path, "wb") as outfile:
-                # asyncio.gather preserves the order of tasks, so results are already correctly ordered from part 0 to part N.
-                # Sorting them alphabetically was breaking the file structure (part10 before part2).
                 for part in [r for r in results if r]:
                     async with aiofiles.open(part, "rb") as infile:
-                        content = await infile.read()
-                        await outfile.write(content)
-                    os.remove(part)
+                        while True:
+                            buffer = await infile.read(1024 * 1024) # 1MB buffer
+                            if not buffer:
+                                break
+                            await outfile.write(buffer)
+                    try:
+                        os.remove(part)
+                    except Exception:
+                        pass
                     
             logger.success(f"Chunked download {ctx.id} completed successfully.")
             _update_db(ctx, progress=100.0, status="completed", downloaded=total_size)
@@ -552,11 +600,7 @@ async def _run_chunked_download_async(ctx: DownloadContext):
     except Exception as e:
         logger.exception(f"Async chunk download error for {ctx.id}: {e}")
         _update_db(ctx, status="error", error_message=str(e))
-        # Clean up .part chunk files on error
-        try:
-            _cleanup_part_files(final_path, num_threads)
-        except Exception:
-            pass
+        # DO NOT clean up part files on error, allow the user to retry/resume
 
 async def _normal_download_async(ctx: DownloadContext, session, path, total_size, extra_headers=None):
     try:
@@ -602,6 +646,9 @@ async def _normal_download_async(ctx: DownloadContext, session, path, total_size
                             _update_db(ctx, progress=prog, speed=current_speed, downloaded=downloaded[0])
                             last_update[0] = now
                             last_update[1] = downloaded[0]
+                        if GLOBAL_SPEED_LIMIT_KBPS > 0:
+                            expected_time = len(chunk) / (GLOBAL_SPEED_LIMIT_KBPS * 1024)
+                            await asyncio.sleep(min(0.5, expected_time))
 
         final_size = downloaded[0] if downloaded[0] > 0 else actual_total
         logger.success(f"Normal download {ctx.id} completed successfully. Size: {final_size}")

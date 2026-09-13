@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from sqlalchemy import create_engine, Column, String, Float, Integer, Boolean, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -37,8 +38,27 @@ class DownloadRecord(Base):
     downloaded = Column(Float, default=0.0)
     is_yt_dlp = Column(Boolean, default=False)
     error_message = Column(String, default="")
+    created_at = Column(Float, default=lambda: time.time() * 1000)
 
 Base.metadata.create_all(bind=engine)
+
+# Auto-migration for SQLite database
+def auto_migrate():
+    try:
+        with engine.connect() as conn:
+            cursor = conn.connection.cursor()
+            cursor.execute("PRAGMA table_info(downloads)")
+            columns = [row[1] for row in cursor.fetchall()]
+            now_ms = time.time() * 1000
+            if "created_at" not in columns:
+                cursor.execute("ALTER TABLE downloads ADD COLUMN created_at FLOAT")
+                cursor.execute(f"UPDATE downloads SET created_at = {now_ms} WHERE created_at IS NULL")
+                conn.connection.commit()
+            cursor.close()
+    except Exception as e:
+        pass
+
+auto_migrate()
 
 def get_db():
     db = SessionLocal()

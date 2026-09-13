@@ -411,204 +411,251 @@
         <!-- ===== MY ACCOUNT ===== -->
         <div class="route" data-route="account" hidden>
           <!-- Profile Hero -->
-          <div class="account-hero">
-            <div class="account-cover"></div>
-            <div class="account-hero-body">
-              <div class="account-avatar-wrap">
-                <div class="account-avatar" id="account-avatar">A</div>
-                <button class="avatar-upload-btn" id="avatar-upload-btn" title="Change avatar">
+          <div class="acct-hero">
+            <div class="acct-cover">
+              <div class="acct-cover-actions">
+                <button class="acct-cover-btn" type="button"><i data-lucide="image"></i> Change cover</button>
+                <button class="acct-cover-btn" type="button"><i data-lucide="share-2"></i> Share</button>
+              </div>
+            </div>
+            <div class="acct-body">
+              <div class="acct-avatar-wrap">
+                <div class="acct-avatar" id="account-avatar">A</div>
+                <button class="avatar-upload-btn" id="avatar-upload-btn" title="Change avatar" type="button">
                   <i data-lucide="camera"></i>
                 </button>
               </div>
-              <div class="account-hero-info">
-                <div class="account-name-row">
+              <div class="acct-info">
+                <div class="acct-name-row">
                   <h2 id="account-display-name">Admin</h2>
-                  <span class="verified-badge" id="account-verified">
+                  <span class="acct-pill verified" id="account-verified">
                     <i data-lucide="badge-check"></i> Verified
                   </span>
+                  <span class="acct-pill pro"><i data-lucide="crown"></i> Pro</span>
+                  <span class="acct-pill online"><span class="dot"></span> Online</span>
                 </div>
-                <div class="account-email" id="account-email-display">—</div>
-                <div class="account-tags">
-                  <span class="tag tag-role"><i data-lucide="shield"></i> Administrator</span>
-                  <span class="tag"><i data-lucide="calendar"></i> Joined <span id="account-joined">—</span></span>
-                  <span class="tag"><i data-lucide="globe"></i> <span id="account-location">Earth</span></span>
+                <div class="acct-handle" id="account-email-display">—</div>
+                <div class="acct-meta">
+                  <span class="acct-meta-item"><i data-lucide="shield"></i> Super Admin</span>
+                  <span class="acct-meta-item"><i data-lucide="calendar"></i> Joined <span id="account-joined">—</span></span>
+                  <span class="acct-meta-item"><i data-lucide="globe"></i> <span id="account-location">Earth</span></span>
                 </div>
               </div>
-              <div class="account-hero-stats">
-                <div class="hero-stat">
-                  <div class="hero-stat-value" data-personal-stat="handled">0</div>
-                  <div class="hero-stat-label">Handled</div>
+              <div class="acct-stats">
+                <div class="acct-stat">
+                  <div class="acct-stat-value" data-personal-stat="handled">0</div>
+                  <div class="acct-stat-label">Handled</div>
                 </div>
-                <div class="hero-stat">
-                  <div class="hero-stat-value" data-personal-stat="resolved">0</div>
-                  <div class="hero-stat-label">Resolved</div>
+                <div class="acct-stat">
+                  <div class="acct-stat-value" data-personal-stat="resolved">0</div>
+                  <div class="acct-stat-label">Resolved</div>
                 </div>
-                <div class="hero-stat">
-                  <div class="hero-stat-value" data-personal-stat="replies">0</div>
-                  <div class="hero-stat-label">Replies</div>
-                </div>
-                <div class="hero-stat">
-                  <div class="hero-stat-value" data-personal-stat="rating">—</div>
-                  <div class="hero-stat-label">Rating</div>
+                <div class="acct-stat">
+                  <div class="acct-stat-value" data-personal-stat="rating">—</div>
+                  <div class="acct-stat-label">Rating</div>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- Tabs -->
-          <div class="account-layout">
-            <aside class="account-tabs">
-              <button class="account-tab active" data-account-tab="profile">
-                <i data-lucide="user"></i><span>Profile</span>
-              </button>
-              <button class="account-tab" data-account-tab="security">
-                <i data-lucide="shield"></i><span>Security</span>
-                <span class="tab-badge">!</span>
-              </button>
-              <button class="account-tab" data-account-tab="notifications">
-                <i data-lucide="bell"></i><span>Notifications</span>
-              </button>
-              <button class="account-tab" data-account-tab="activity">
-                <i data-lucide="activity"></i><span>Activity</span>
-              </button>
-              <button class="account-tab" data-account-tab="integrations">
-                <i data-lucide="plug-2"></i><span>Integrations</span>
-              </button>
-              <button class="account-tab danger" data-account-tab="danger">
-                <i data-lucide="alert-octagon"></i><span>Danger Zone</span>
-              </button>
-            </aside>
+          <!-- Tabs (horizontal pill row) -->
+          <div class="acct-tabs" role="tablist">
+            <button class="acct-tab active" data-account-tab="profile" role="tab">
+              <i data-lucide="user"></i> Profile
+            </button>
+            <button class="acct-tab" data-account-tab="security" role="tab">
+              <i data-lucide="shield"></i> Security <span class="tab-badge">!</span>
+            </button>
+            <button class="acct-tab" data-account-tab="notifications" role="tab">
+              <i data-lucide="bell"></i> Notifications
+            </button>
+            <button class="acct-tab" data-account-tab="activity" role="tab">
+              <i data-lucide="activity"></i> Activity
+            </button>
+            <button class="acct-tab" data-account-tab="integrations" role="tab">
+              <i data-lucide="plug-2"></i> Integrations
+            </button>
+            <button class="acct-tab danger" data-account-tab="danger" role="tab">
+              <i data-lucide="alert-octagon"></i> Danger Zone
+            </button>
+          </div>
 
-            <div class="account-content">
-              <!-- ===== PROFILE TAB ===== -->
-              <div class="account-pane active" data-account-pane="profile">
-                <div class="card">
-                  <div class="card-head">
-                    <div>
-                      <h3>Public Profile</h3>
-                      <div class="card-sub">How others see you across the platform</div>
+          <!-- Panes -->
+          <div class="account-panes">
+            <!-- ===== PROFILE TAB ===== -->
+            <div class="account-pane active" data-account-pane="profile">
+              <div class="acct-grid">
+                <div class="acct-form-stack">
+                  <!-- Public Profile -->
+                  <div class="acct-form-card">
+                    <div class="acct-form-head">
+                      <div>
+                        <h3>Public Profile</h3>
+                        <p>How others see you across the platform</p>
+                      </div>
+                      <span class="save-indicator" id="save-indicator">
+                        <i data-lucide="check-circle-2"></i> All changes saved
+                      </span>
                     </div>
-                    <div class="save-indicator" id="save-indicator">
-                      <i data-lucide="check-circle-2"></i>
-                      <span>All changes saved</span>
-                    </div>
-                  </div>
+                    <div class="acct-form-body">
+                      <div class="acct-section">
+                        <div class="acct-section-title"><i data-lucide="user"></i> Identity</div>
+                        <div class="acct-row">
+                          <div class="acct-field">
+                            <label>Display name</label>
+                            <div class="acct-input">
+                              <i data-lucide="user"></i>
+                              <input type="text" id="profile-name" placeholder="Your name" />
+                            </div>
+                          </div>
+                          <div class="acct-field">
+                            <label>Username</label>
+                            <div class="acct-input">
+                              <span class="prefix">@</span>
+                              <input type="text" id="profile-username" placeholder="username" />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
 
-                  <div class="form-grid">
-                    <div class="form-field">
-                      <label>Display name</label>
-                      <input type="text" id="profile-name" placeholder="Your name" />
-                      <div class="field-hint">This will be displayed across the dashboard</div>
-                    </div>
-                    <div class="form-field">
-                      <label>Username</label>
-                      <div class="input-wrap">
-                        <span class="prefix">@</span>
-                        <input type="text" id="profile-username" placeholder="username" />
+                      <div class="acct-section">
+                        <div class="acct-section-title"><i data-lucide="contact"></i> Contact</div>
+                        <div class="acct-row">
+                          <div class="acct-field full">
+                            <label>Email</label>
+                            <div class="acct-input readonly">
+                              <i data-lucide="mail"></i>
+                              <input type="email" id="profile-email" readonly />
+                              <span class="verified-pill" id="email-verified-pill">
+                                <i data-lucide="check"></i> Verified
+                              </span>
+                            </div>
+                          </div>
+                          <div class="acct-field full">
+                            <label>Phone</label>
+                            <div class="acct-input">
+                              <i data-lucide="phone"></i>
+                              <input type="tel" id="profile-phone" placeholder="+20 100 000 0000" />
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                      <div class="field-hint">Unique identifier for mentions</div>
-                    </div>
-                    <div class="form-field full">
-                      <label>Email</label>
-                      <div class="input-wrap readonly">
-                        <i data-lucide="mail"></i>
-                        <input type="email" id="profile-email" readonly />
-                        <span class="verified-pill" id="email-verified-pill">
-                          <i data-lucide="check"></i> Verified
-                        </span>
+
+                      <div class="acct-section">
+                        <div class="acct-section-title"><i data-lucide="map"></i> Location & Web</div>
+                        <div class="acct-row">
+                          <div class="acct-field">
+                            <label>Location</label>
+                            <div class="acct-input">
+                              <i data-lucide="map-pin"></i>
+                              <input type="text" id="profile-location" placeholder="City, Country" />
+                            </div>
+                          </div>
+                          <div class="acct-field">
+                            <label>Website</label>
+                            <div class="acct-input">
+                              <i data-lucide="link"></i>
+                              <input type="url" id="profile-website" placeholder="https://yoursite.com" />
+                            </div>
+                          </div>
+                        </div>
+                        <div class="acct-row" style="margin-top:12px">
+                          <div class="acct-field full">
+                            <label>Timezone</label>
+                            <div class="acct-input">
+                              <i data-lucide="clock"></i>
+                              <select id="profile-timezone">
+                                <option value="Africa/Cairo">Africa/Cairo (GMT+2)</option>
+                                <option value="Europe/London">Europe/London (GMT+0)</option>
+                                <option value="America/New_York">America/New_York (GMT-5)</option>
+                                <option value="America/Los_Angeles">America/Los_Angeles (GMT-8)</option>
+                                <option value="Asia/Dubai">Asia/Dubai (GMT+4)</option>
+                                <option value="Asia/Riyadh">Asia/Riyadh (GMT+3)</option>
+                                <option value="Asia/Tokyo">Asia/Tokyo (GMT+9)</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    <div class="form-field">
-                      <label>Phone</label>
-                      <div class="input-wrap">
-                        <i data-lucide="phone"></i>
-                        <input type="tel" id="profile-phone" placeholder="+20 100 000 0000" />
+
+                      <div class="acct-section">
+                        <div class="acct-section-title"><i data-lucide="align-left"></i> About you</div>
+                        <div class="acct-field full">
+                          <div class="acct-input" style="align-items:flex-start">
+                            <i data-lucide="message-square" style="margin-top:2px"></i>
+                            <textarea id="profile-bio" rows="3" placeholder="Tell us a bit about yourself…" maxlength="280"></textarea>
+                          </div>
+                          <div class="acct-hint"><span id="bio-count">0</span>/280</div>
+                        </div>
                       </div>
-                    </div>
-                    <div class="form-field">
-                      <label>Location</label>
-                      <div class="input-wrap">
-                        <i data-lucide="map-pin"></i>
-                        <input type="text" id="profile-location" placeholder="City, Country" />
-                      </div>
-                    </div>
-                    <div class="form-field">
-                      <label>Website</label>
-                      <div class="input-wrap">
-                        <i data-lucide="link"></i>
-                        <input type="url" id="profile-website" placeholder="https://yoursite.com" />
-                      </div>
-                    </div>
-                    <div class="form-field">
-                      <label>Timezone</label>
-                      <div class="input-wrap">
-                        <i data-lucide="clock"></i>
-                        <select id="profile-timezone">
-                          <option value="Africa/Cairo">Africa/Cairo (GMT+2)</option>
-                          <option value="Europe/London">Europe/London (GMT+0)</option>
-                          <option value="America/New_York">America/New_York (GMT-5)</option>
-                          <option value="America/Los_Angeles">America/Los_Angeles (GMT-8)</option>
-                          <option value="Asia/Dubai">Asia/Dubai (GMT+4)</option>
-                          <option value="Asia/Riyadh">Asia/Riyadh (GMT+3)</option>
-                          <option value="Asia/Tokyo">Asia/Tokyo (GMT+9)</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div class="form-field full">
-                      <label>Bio</label>
-                      <textarea id="profile-bio" rows="3" placeholder="Tell us a bit about yourself…" maxlength="280"></textarea>
-                      <div class="field-hint"><span id="bio-count">0</span>/280</div>
                     </div>
                   </div>
                 </div>
 
-                <div class="card">
-                  <div class="card-head">
-                    <div>
-                      <h3>Social Links</h3>
-                      <div class="card-sub">Connect your accounts to enrich your profile</div>
+                <!-- Right sidebar: live preview + social -->
+                <div class="acct-side">
+                  <div class="acct-preview">
+                    <div class="acct-preview-cover"></div>
+                    <div class="acct-preview-avatar" id="acct-preview-avatar">A</div>
+                    <div class="acct-preview-name" id="acct-preview-name">Admin</div>
+                    <div class="acct-preview-handle" id="acct-preview-handle">@admin</div>
+                    <div class="acct-preview-bio" id="acct-preview-bio">Tell others a bit about yourself…</div>
+                    <div class="acct-preview-stats">
+                      <div class="acct-preview-stat"><div class="acct-preview-stat-n" id="acct-preview-handled">0</div><div class="acct-preview-stat-l">Handled</div></div>
+                      <div class="acct-preview-stat"><div class="acct-preview-stat-n" id="acct-preview-resolved">0</div><div class="acct-preview-stat-l">Resolved</div></div>
+                      <div class="acct-preview-stat"><div class="acct-preview-stat-n" id="acct-preview-rating">—</div><div class="acct-preview-stat-l">Rating</div></div>
                     </div>
+                    <div class="acct-completeness">
+                      <div class="acct-completeness-head">
+                        <span class="acct-completeness-label">Profile completeness</span>
+                        <span class="acct-completeness-value" id="acct-completeness-value">0%</span>
+                      </div>
+                      <div class="acct-progress"><div class="acct-progress-fill" id="acct-progress-fill"></div></div>
+                    </div>
+                    <button class="acct-btn" type="button" style="width:100%;justify-content:center">
+                      <i data-lucide="external-link"></i> View public profile
+                    </button>
                   </div>
-                  <div class="social-grid">
-                    <div class="social-input">
-                      <div class="social-icon" style="background:linear-gradient(135deg,#333,#000)">
-                        <i data-lucide="github"></i>
+
+                  <div class="acct-form-card">
+                    <div class="acct-form-head" style="background:transparent;padding:18px 20px">
+                      <div>
+                        <h3 style="font-size:14px">Social Links</h3>
+                        <p>Connect your accounts</p>
                       </div>
-                      <input type="text" id="social-github" placeholder="github.com/username" />
                     </div>
-                    <div class="social-input">
-                      <div class="social-icon" style="background:linear-gradient(135deg,#1da1f2,#0d8ddc)">
-                        <i data-lucide="twitter"></i>
+                    <div class="acct-form-body" style="padding:16px 20px">
+                      <div class="acct-social-grid">
+                        <div class="acct-social">
+                          <div class="ic" style="background:linear-gradient(135deg,#333,#000)"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg></div>
+                          <input type="text" id="social-github" placeholder="github.com/username" />
+                        </div>
+                        <div class="acct-social">
+                          <div class="ic" style="background:linear-gradient(135deg,#1da1f2,#0d8ddc)"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 4s-.7 2.1-2 3.4c1.6 10-9.4 17.3-18 11.6 2.2.1 4.4-.6 6-2C3 15.5.5 9.6 3 5c2.2 2.6 5.6 4.1 9 4-.9-4.2 4-6.6 7-3.8 1.1 0 3-1.2 3-1.2z"/></svg></div>
+                          <input type="text" id="social-twitter" placeholder="@handle" />
+                        </div>
+                        <div class="acct-social">
+                          <div class="ic" style="background:linear-gradient(135deg,#5865f2,#404eed)"><i data-lucide="message-circle"></i></div>
+                          <input type="text" id="social-discord" placeholder="username#0000" />
+                        </div>
+                        <div class="acct-social">
+                          <div class="ic" style="background:linear-gradient(135deg,#e4405f,#fcaf45)"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="20" x="2" y="2" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" x2="17.51" y1="6.5" y2="6.5"/></svg></div>
+                          <input type="text" id="social-instagram" placeholder="@handle" />
+                        </div>
+                        <div class="acct-social">
+                          <div class="ic" style="background:linear-gradient(135deg,#0a66c2,#004182)"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"/><rect width="4" height="12" x="2" y="9"/><circle cx="4" cy="4" r="2"/></svg></div>
+                          <input type="text" id="social-linkedin" placeholder="in/username" />
+                        </div>
+                        <div class="acct-social">
+                          <div class="ic" style="background:linear-gradient(135deg,#ff0000,#cc0000)"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 17a24.12 24.12 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.56 49.56 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.12 24.12 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.55 49.55 0 0 1-16.2 0A2 2 0 0 1 2.5 17"/><path d="m10 15 5-3-5-3z"/></svg></div>
+                          <input type="text" id="social-youtube" placeholder="@channel" />
+                        </div>
                       </div>
-                      <input type="text" id="social-twitter" placeholder="@handle" />
-                    </div>
-                    <div class="social-input">
-                      <div class="social-icon" style="background:linear-gradient(135deg,#5865f2,#404eed)">
-                        <i data-lucide="message-circle"></i>
-                      </div>
-                      <input type="text" id="social-discord" placeholder="username#0000" />
-                    </div>
-                    <div class="social-input">
-                      <div class="social-icon" style="background:linear-gradient(135deg,#e4405f,#fcaf45)">
-                        <i data-lucide="instagram"></i>
-                      </div>
-                      <input type="text" id="social-instagram" placeholder="@handle" />
-                    </div>
-                    <div class="social-input">
-                      <div class="social-icon" style="background:linear-gradient(135deg,#0a66c2,#004182)">
-                        <i data-lucide="linkedin"></i>
-                      </div>
-                      <input type="text" id="social-linkedin" placeholder="in/username" />
-                    </div>
-                    <div class="social-input">
-                      <div class="social-icon" style="background:linear-gradient(135deg,#ff0000,#cc0000)">
-                        <i data-lucide="youtube"></i>
-                      </div>
-                      <input type="text" id="social-youtube" placeholder="@channel" />
                     </div>
                   </div>
                 </div>
               </div>
+            </div>
 
               <!-- ===== SECURITY TAB ===== -->
               <div class="account-pane" data-account-pane="security" hidden>
@@ -620,12 +667,12 @@
                       <div class="card-sub">Last changed <span id="pwd-last-changed">never</span></div>
                     </div>
                   </div>
-                  <div class="form-grid">
+                  <form class="form-grid" onsubmit="return false;">
                     <div class="form-field full">
                       <label>Current password</label>
                       <div class="input-wrap">
                         <i data-lucide="lock"></i>
-                        <input type="password" id="pwd-current" placeholder="Enter current password" />
+                        <input type="password" id="pwd-current" autocomplete="current-password" placeholder="Enter current password" />
                         <button type="button" class="suffix-btn" data-toggle-pwd="pwd-current">
                           <i data-lucide="eye"></i>
                         </button>
@@ -635,7 +682,7 @@
                       <label>New password</label>
                       <div class="input-wrap">
                         <i data-lucide="key"></i>
-                        <input type="password" id="pwd-new" placeholder="Choose a strong password" />
+                        <input type="password" id="pwd-new" autocomplete="new-password" placeholder="Choose a strong password" />
                         <button type="button" class="suffix-btn" data-toggle-pwd="pwd-new">
                           <i data-lucide="eye"></i>
                         </button>
@@ -649,13 +696,13 @@
                       <label>Confirm new password</label>
                       <div class="input-wrap">
                         <i data-lucide="key"></i>
-                        <input type="password" id="pwd-confirm" placeholder="Repeat new password" />
+                        <input type="password" id="pwd-confirm" autocomplete="new-password" placeholder="Repeat new password" />
                         <button type="button" class="suffix-btn" data-toggle-pwd="pwd-confirm">
                           <i data-lucide="eye"></i>
                         </button>
                       </div>
                     </div>
-                  </div>
+                  </form>
                   <div class="form-actions">
                     <button class="btn-primary" id="btn-change-password">
                       <i data-lucide="shield-check"></i><span>Update password</span>
@@ -953,7 +1000,7 @@
                     <div class="integration-card" data-integration="github">
                       <div class="integration-head">
                         <div class="integration-icon" style="background:linear-gradient(135deg,#333,#000)">
-                          <i data-lucide="github"></i>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>
                         </div>
                         <label class="switch">
                           <input type="checkbox" data-integration-toggle="github">
@@ -1164,8 +1211,9 @@
       </div>
 
       <div class="modal-message-wrap">
-        <div class="meta-label">Message</div>
-        <div class="modal-message" id="modal-message">—</div>
+        <div class="chat-history" id="modal-chat-history">
+          <div class="muted center pad" style="flex:1;display:flex;align-items:center;justify-content:center;">Loading conversation...</div>
+        </div>
       </div>
 
       <div class="modal-section">

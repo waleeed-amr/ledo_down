@@ -1,8 +1,37 @@
 const API_URL = 'http://127.0.0.1:8000/api';
 const WS_URL = 'ws://127.0.0.1:8000/ws';
 
+// Global Error Handlers for Crash Reporting
+window.onerror = function(message, source, lineno, colno, error) {
+    if (window.firebaseApp && window.firebaseApp.uploadCrashReport) {
+        window.firebaseApp.uploadCrashReport(
+            message.toString(),
+            error ? error.stack : null,
+            { source, lineno, colno }
+        );
+    }
+};
+
+window.addEventListener('unhandledrejection', function(event) {
+    if (window.firebaseApp && window.firebaseApp.uploadCrashReport) {
+        window.firebaseApp.uploadCrashReport(
+            event.reason ? event.reason.toString() : 'Unhandled Rejection',
+            event.reason && event.reason.stack ? event.reason.stack : null,
+            { type: 'unhandledrejection' }
+        );
+    }
+});
+
 // WebSocket connection
 let ws;
+
+// Window focus tracking for notifications
+let isAppFocused = true;
+if (window.electronAPI && window.electronAPI.onWindowFocusChange) {
+    window.electronAPI.onWindowFocusChange((focused) => {
+        isAppFocused = focused;
+    });
+}
 
 // ============================================
 // SETTINGS MANAGEMENT
@@ -374,7 +403,14 @@ function connectWebSocket() {
             const payload = JSON.parse(event.data);
             if (payload.type === 'open_quick_add') {
                 if (window.electronAPI && window.electronAPI.showQuickAdd) {
-                    window.electronAPI.showQuickAdd(payload.url, payload.cookies, payload.user_agent);
+                    window.electronAPI.showQuickAdd({
+                        url: payload.url,
+                        cookies: payload.cookies,
+                        user_agent: payload.user_agent,
+                        filename: payload.filename,
+                        file_size: payload.file_size,
+                        mime_type: payload.mime_type
+                    });
                 }
             } else if (payload.type === 'state' || payload.type === 'downloads') {
                 processDownloadsState(payload.downloads || []);
@@ -387,7 +423,11 @@ function connectWebSocket() {
                     if (prevStatus !== dl.status) {
                         if (dl.status === 'completed' && prevStatus) {
                             showToast(`Download Completed: ${dl.filename || 'File'}`, '#10b981');
-                            new Notification('Ledo Downloader', { body: `Download Completed: ${dl.filename || 'File'}` });
+                            if (window.electronAPI && window.electronAPI.showNotification) {
+                                window.electronAPI.showNotification('Ledo Downloader', `Download Completed: ${dl.filename || 'File'}`);
+                            } else {
+                                new Notification('Ledo Downloader', { body: `Download Completed: ${dl.filename || 'File'}` });
+                            }
                             if (window.confetti) {
                                 const duration = 2000;
                                 const end = Date.now() + duration;
@@ -413,7 +453,19 @@ function connectWebSocket() {
                             }
                         } else if (dl.status === 'error' && prevStatus) {
                             showToast(`Download Failed: ${dl.filename || dl.url}`, '#ef4444');
-                            new Notification('Ledo Downloader', { body: `Download Failed: ${dl.filename || 'File'}` });
+                            if (window.electronAPI && window.electronAPI.showNotification) {
+                                window.electronAPI.showNotification('Ledo Downloader', `Download Failed: ${dl.filename || 'File'}`);
+                            } else {
+                                new Notification('Ledo Downloader', { body: `Download Failed: ${dl.filename || 'File'}` });
+                            }
+                            // Report download errors to Firebase
+                            if (window.firebaseApp && window.firebaseApp.uploadCrashReport) {
+                                window.firebaseApp.uploadCrashReport(
+                                    dl.error_message || 'Download Failed',
+                                    null,
+                                    { type: 'download_error', url: dl.url, filename: dl.filename, downloadId: dl.id }
+                                );
+                            }
                         }
                         window.knownDownloads.set(dl.id, dl.status);
                     }
@@ -706,9 +758,30 @@ function renderDownloads(downloads) {
             `;
         }
 
-        let cancelBtnHtml = '';
+        let actionBtnHtml = '';
         if (['downloading', 'starting'].includes(dl.status)) {
-            cancelBtnHtml = `
+            actionBtnHtml = `
+                <button class="btn-action" onclick="pauseDownload('${dl.id}')" title="Pause Download" style="background: none; border: none; color: #f59e0b; cursor: pointer; padding: 4px;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                </button>
+                <button class="btn-cancel-dl" onclick="cancelDownload('${dl.id}')" title="Cancel Download">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            `;
+        } else if (dl.status === 'paused') {
+            actionBtnHtml = `
+                <button class="btn-action" onclick="resumeDownload('${dl.id}')" title="Resume Download" style="background: none; border: none; color: #10b981; cursor: pointer; padding: 4px;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                </button>
+                <button class="btn-cancel-dl" onclick="cancelDownload('${dl.id}')" title="Cancel Download">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            `;
+        } else if (dl.status === 'error') {
+            actionBtnHtml = `
+                <button class="btn-action" onclick="retryDownload('${dl.id}')" title="Retry Download" style="background: none; border: none; color: #3b82f6; cursor: pointer; padding: 4px;">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                </button>
                 <button class="btn-cancel-dl" onclick="cancelDownload('${dl.id}')" title="Cancel Download">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
@@ -726,7 +799,7 @@ function renderDownloads(downloads) {
                 <div class="dl-actions">
                     ${playBtnHtml}
                     <div class="dl-status ${dl.status}">${dl.status}</div>
-                    ${cancelBtnHtml}
+                    ${actionBtnHtml}
                 </div>
             </div>
             ${errorHtml}
@@ -783,9 +856,16 @@ function openDetailsDrawer(dl) {
     const drawer = document.getElementById('details-drawer');
     const content = drawer.querySelector('.drawer-content');
 
-    // Format dates (handle UUIDs gracefully)
-    const parsedId = parseInt(dl.id);
-    const dateAdded = (window.dayjs && !isNaN(parsedId)) ? dayjs(parsedId * 1000).format('DD MMM YYYY, hh:mm A') : 'N/A';
+    // Format dates robustly
+    let dateAdded = 'Unknown';
+    if (dl.created_at) {
+        if (window.dayjs) {
+            dateAdded = dayjs(dl.created_at).format('DD MMM YYYY, hh:mm A');
+        } else {
+            const d = new Date(dl.created_at);
+            dateAdded = isNaN(d.getTime()) ? 'Recently' : d.toLocaleString('en-US', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+        }
+    }
 
     let html = `
         <div class="drawer-header-content">
@@ -955,6 +1035,36 @@ window.cancelDownload = async function (id) {
                 showToast("Failed to cancel download.", "#ef4444");
             }
         }
+    }
+}
+
+window.pauseDownload = async function(id) {
+    try {
+        await axios.post(`${API_URL}/pause/${id}`);
+        showToast("Pausing download...", "#f59e0b");
+    } catch (e) {
+        console.error("Pause failed", e);
+        showToast("Failed to pause download.", "#ef4444");
+    }
+}
+
+window.resumeDownload = async function(id) {
+    try {
+        await axios.post(`${API_URL}/resume/${id}`);
+        showToast("Resuming download...", "#10b981");
+    } catch (e) {
+        console.error("Resume failed", e);
+        showToast("Failed to resume download.", "#ef4444");
+    }
+}
+
+window.retryDownload = async function(id) {
+    try {
+        await axios.post(`${API_URL}/resume/${id}`);
+        showToast("Retrying download...", "#3b82f6");
+    } catch (e) {
+        console.error("Retry failed", e);
+        showToast("Failed to retry download.", "#ef4444");
     }
 }
 
@@ -1152,6 +1262,17 @@ if (btnClearHistory) {
     });
 }
 
+// Titlebar Window Controls
+document.getElementById('btn-minimize')?.addEventListener('click', () => {
+    window.electronAPI.windowControl('minimize');
+});
+document.getElementById('btn-maximize')?.addEventListener('click', () => {
+    window.electronAPI.windowControl('maximize');
+});
+document.getElementById('btn-close')?.addEventListener('click', () => {
+    window.electronAPI.windowControl('close');
+});
+
 // Navigation logic (Sidebar)
 document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', (e) => {
@@ -1227,17 +1348,69 @@ function initFirebaseAuth() {
                     emptyMsg.style.display = 'none';
                     inboxContainer.innerHTML = '';
                     messages.forEach(msg => {
+                        let dateObj = msg.createdAt;
+                        if (dateObj && typeof dateObj.toDate === 'function') dateObj = dateObj.toDate();
+                        else if (dateObj && dateObj.seconds) dateObj = new Date(dateObj.seconds * 1000);
+                        else dateObj = new Date(dateObj);
+                        
+                        let dateStr = isNaN(dateObj.getTime()) ? '' : dateObj.toLocaleString();
+
                         const div = document.createElement('div');
                         div.style = "background: rgba(99, 102, 241, 0.1); border-right: 3px solid #6366f1; padding: 10px; border-radius: 6px; font-size: 13px;";
                         div.innerHTML = `
                             <div style="color: #6366f1; font-weight: bold; margin-bottom: 4px;">الادارة:</div>
                             <div style="color: var(--text-main);">${msg.text || msg.message}</div>
-                            <div style="color: var(--text-muted); font-size: 10px; margin-top: 4px; text-align: left;">${new Date(msg.createdAt).toLocaleString()}</div>
+                            <div style="color: var(--text-muted); font-size: 10px; margin-top: 4px; text-align: left;">${dateStr}</div>
                         `;
                         inboxContainer.appendChild(div);
                     });
                     inboxContainer.appendChild(emptyMsg); // keep it at the bottom but hidden
                 }
+            });
+
+            // Listen to Chat
+            if (window.unsubscribeChat) window.unsubscribeChat();
+            window.unsubscribeChat = firebaseApp.listenToChat((messages) => {
+                const chatContainer = document.getElementById('chat-messages');
+                if (!chatContainer) return;
+                
+                chatContainer.innerHTML = '';
+                if (messages.length === 0) {
+                    chatContainer.innerHTML = `<div class="chat-empty" style="text-align: center; color: rgba(255,255,255,0.4); margin-top: auto; margin-bottom: auto;">أرسل رسالتك وسنرد عليك في أقرب وقت.</div>`;
+                    return;
+                }
+                
+                messages.forEach(msg => {
+                    let dateObj = msg.createdAt;
+                    if (dateObj && typeof dateObj.toDate === 'function') dateObj = dateObj.toDate();
+                    else if (dateObj && dateObj.seconds) dateObj = new Date(dateObj.seconds * 1000);
+                    else if (dateObj) dateObj = new Date(dateObj);
+                    else dateObj = new Date();
+                    
+                    let timeStr = isNaN(dateObj.getTime()) ? '' : dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+                    const isUser = !msg.isAdmin;
+                    const div = document.createElement('div');
+                    div.style.cssText = `background: ${isUser ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255, 255, 255, 0.1)'}; border-radius: 12px; padding: 8px 12px; font-size: 13px; max-width: 80%; align-self: ${isUser ? 'flex-end' : 'flex-start'}; color: white; word-wrap: break-word; overflow-wrap: break-word;`;
+                    div.innerHTML = `
+                        <div style="margin-bottom: 2px;">${msg.text}</div>
+                        <div style="font-size: 10px; color: rgba(255,255,255,0.5); text-align: ${isUser ? 'left' : 'right'};">${timeStr}</div>
+                    `;
+                    chatContainer.appendChild(div);
+                });
+                
+                // Show notification for new message if not focused
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg && lastMsg.isAdmin && !isAppFocused) {
+                    if (window.electronAPI && window.electronAPI.showNotification) {
+                        window.electronAPI.showNotification('رسالة جديدة من الدعم الفني', lastMsg.text);
+                    } else {
+                        new Notification('رسالة جديدة من الدعم الفني', { body: lastMsg.text });
+                    }
+                }
+
+                // Auto scroll to bottom
+                chatContainer.scrollTop = chatContainer.scrollHeight;
             });
         } else {
             authSection.style.display = 'block';
@@ -1281,29 +1454,34 @@ function initFirebaseAuth() {
         else authError.innerText = "";
     });
     
-    // Support Ticket Submit
-    document.getElementById('btn-submit-support')?.addEventListener('click', async () => {
-        const subject = document.getElementById('support-subject').value;
-        const msg = document.getElementById('support-message').value;
-        if (!subject || !msg) return showToast("يرجى تعبئة جميع الحقول أولاً", "#ef4444");
-        
-        const btn = document.getElementById('btn-submit-support');
+    // Chat System Submit
+    document.getElementById('btn-send-chat')?.addEventListener('click', async () => {
+        const msgInput = document.getElementById('chat-input');
+        const msg = msgInput.value.trim();
+        if (!msg) return;
+
+        const btn = document.getElementById('btn-send-chat');
+        const oldContent = btn.innerHTML;
+        btn.innerHTML = '<i data-lucide="loader" class="spinner"></i>';
         btn.disabled = true;
-        btn.innerHTML = `<i data-lucide="loader" class="spinner"></i> جاري الإرسال...`;
         if (window.lucide) lucide.createIcons();
 
-        const res = await firebaseApp.submitSupportTicket(subject, msg);
+        const res = await firebaseApp.sendChatMessage(msg);
         if (res.success) {
-            showToast("تم إرسال رسالتك للإدارة بنجاح!", "#10b981");
-            document.getElementById('support-subject').value = '';
-            document.getElementById('support-message').value = '';
+            msgInput.value = '';
         } else {
-            showToast("حدث خطأ أثناء الإرسال: " + res.error, "#ef4444");
+            showToast(res.error, '#ef4444');
         }
-        
+
+        btn.innerHTML = oldContent;
         btn.disabled = false;
-        btn.innerHTML = `<i data-lucide="send"></i> إرسال التذكرة`;
         if (window.lucide) lucide.createIcons();
+    });
+
+    document.getElementById('chat-input')?.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            document.getElementById('btn-send-chat')?.click();
+        }
     });
 
     // Logout
@@ -1405,9 +1583,10 @@ async function updateSystemStats() {
     if (!window.electronAPI || !window.electronAPI.getSystemStats) return;
     try {
         const stats = await window.electronAPI.getSystemStats();
+        if (!stats) return;
 
-        const cpuVal = stats.cpu;
-        const ramVal = stats.ram;
+        const cpuVal = typeof stats.cpu === 'number' ? stats.cpu : 0;
+        const ramVal = typeof stats.ram === 'number' ? stats.ram : 0;
 
         const cpuCirc = document.getElementById('stat-cpu-circle');
         const cpuText = document.getElementById('stat-cpu-val');
@@ -1421,24 +1600,28 @@ async function updateSystemStats() {
 
         // Calculate total network speed from active downloads
         let totalSpeed = 0;
-        rawDownloadsData.forEach(dl => {
-            if (dl.status === 'downloading') {
-                totalSpeed += (dl.speed || 0);
-            }
-        });
+        if (Array.isArray(rawDownloadsData)) {
+            rawDownloadsData.forEach(dl => {
+                if (dl && dl.status === 'downloading') {
+                    totalSpeed += (dl.speed || 0);
+                }
+            });
+        }
 
         const netVal = document.getElementById('stat-net-val');
         if (netVal) netVal.innerText = totalSpeed > 0 ? formatBytes(totalSpeed) + '/s' : '--';
 
         // Update Chart
-        netHistory.shift();
-        netHistory.push(totalSpeed);
-        if (sysNetChartInstance) {
-            sysNetChartInstance.update();
+        if (Array.isArray(netHistory)) {
+            netHistory.shift();
+            netHistory.push(totalSpeed);
+            if (sysNetChartInstance) {
+                sysNetChartInstance.update();
+            }
         }
 
     } catch (e) {
-        console.error("Failed to update system stats", e);
+        console.warn("Could not update system stats:", e && e.message ? e.message : e);
     }
 }
 

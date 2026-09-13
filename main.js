@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, clipboard, dialog, session, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, clipboard, dialog, session, globalShortcut, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs-extra'); // 1. fs-extra: للتعامل المتقدم والآمن مع الملفات
@@ -77,7 +77,8 @@ app.on('second-instance', (event, commandLine, workingDirectory) => {
 });
 
 function createWindow() {
-  const isStartup = process.argv.includes('--hidden');
+  const loginSettings = app.getLoginItemSettings();
+  const isStartup = process.argv.includes('--hidden') || process.argv.includes('-hidden') || loginSettings.wasOpenedAtLogin;
 
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -85,12 +86,14 @@ function createWindow() {
     show: !isStartup, // Show normally if opened manually, hide if startup
     title: "Ledo Downloader",
     backgroundColor: '#111111',
+    frame: false, // Custom title bar
     icon: path.join(__dirname, 'frontend', 'icon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      backgroundThrottling: true
+      backgroundThrottling: true,
+      sandbox: false
     }
   });
 
@@ -118,7 +121,17 @@ function createWindow() {
     if (!isQuiting) {
       event.preventDefault();
       mainWindow.hide();
+      mainWindow.setSkipTaskbar(true);
+      notifyTrayMinimized();
     }
+  });
+
+  mainWindow.on('show', () => {
+    mainWindow.setSkipTaskbar(false);
+  });
+
+  mainWindow.on('hide', () => {
+    mainWindow.setSkipTaskbar(true);
   });
 
   mainWindow.on('blur', () => {
@@ -128,96 +141,25 @@ function createWindow() {
   mainWindow.on('focus', () => {
     mainWindow.webContents.send('window-focus-change', true);
   });
-
-  
-  ipcMain.handle('select-folder', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory']
-    });
-    if (result.canceled) {
-      return null;
-    }
-    return result.filePaths[0];
-  });
-
-  ipcMain.handle('get-default-path', () => {
-    return path.join(app.getPath('downloads'), 'Ledo Downloader');
-  });
-
-  // Toggle the Windows "Run at startup" login item from the Settings UI.
-  // The setting is persisted in electron-store so it survives reinstalls.
-  ipcMain.handle('get-auto-launch', () => {
-    return {
-      available: app.isPackaged,
-      enabled: app.isPackaged ? app.getLoginItemSettings().openAtLogin : false
-    };
-  });
-
-  ipcMain.handle('set-auto-launch', (_event, enabled) => {
-    if (!app.isPackaged) return false;
-    applyAutoLaunch(!!enabled);
-    store.set('launchOnStartup', !!enabled);
-    return app.getLoginItemSettings().openAtLogin;
-  });
-
-  ipcMain.handle('get-system-stats', () => {
-    const cpus = os.cpus();
-    let idle = 0;
-    let total = 0;
-    for (let i = 0, len = cpus.length; i < len; i++) {
-        const cpu = cpus[i];
-        const lastCpu = lastCpuInfo[i] || cpu;
-        for (let type in cpu.times) {
-            total += cpu.times[type] - lastCpu.times[type];
-        }
-        idle += cpu.times.idle - lastCpu.times.idle;
-    }
-    const cpuUsage = total === 0 ? 0 : 100 - ~~(100 * idle / total);
-    lastCpuInfo = cpus;
-
-    const totalMem = os.totalmem();
-    const freeMem = os.freemem();
-    const memUsage = 100 - ~~(100 * freeMem / totalMem);
-
-    return {
-        cpu: cpuUsage,
-        ram: memUsage,
-        totalRam: totalMem,
-        freeRam: freeMem
-    };
-  });
-
-  ipcMain.on('show-quick-add', (event, url, cookies, ua) => {
-    if (!quickAddWindow || quickAddWindow.isDestroyed()) {
-      createQuickAddWindow();
-    }
-    if (url) {
-        const safeUrl = JSON.stringify(url);
-        const safeCookies = JSON.stringify(cookies || '');
-        const safeUa = JSON.stringify(ua || '');
-        quickAddWindow.webContents.executeJavaScript(`
-            document.getElementById('url-input').value = ${safeUrl};
-            document.getElementById('url-input').focus();
-            window.tempCookies = ${safeCookies};
-            window.tempUA = ${safeUa};
-        `);
-    }
-    quickAddWindow.show();
-    quickAddWindow.focus();
-  });
 }
 
 function startPythonBackend() {
   if (app.isPackaged) {
     const backendPath = path.join(process.resourcesPath, 'backend', 'dist', 'main.exe');
-    pythonProcess = spawn(backendPath, [], { cwd: path.dirname(backendPath) });
+    pythonProcess = spawn(backendPath, [], { 
+        cwd: path.dirname(backendPath),
+        windowsHide: true 
+    });
   } else {
     let pythonExecutable = 'python';
     const venvPythonPath = path.join(__dirname, '.venv', 'Scripts', 'python.exe');
     if (fs.existsSync(venvPythonPath)) {
       pythonExecutable = venvPythonPath;
     }
-    pythonProcess = spawn(pythonExecutable, [path.join(__dirname, 'backend', 'main.py')], { cwd: __dirname });
+    pythonProcess = spawn(pythonExecutable, [path.join(__dirname, 'backend', 'main.py')], { 
+        cwd: __dirname,
+        windowsHide: true 
+    });
   }
   
   pythonProcess.stdout.on('data', (data) => {
@@ -226,6 +168,10 @@ function startPythonBackend() {
 
   pythonProcess.stderr.on('data', (data) => {
     log.error(`Python Error: ${data}`);
+  });
+
+  pythonProcess.on('error', (err) => {
+    log.error(`Python process spawn error: ${err.message}`);
   });
 }
 
@@ -258,86 +204,357 @@ function waitForBackend(url, timeout = 60000) {
 
 function createQuickAddWindow() {
   quickAddWindow = new BrowserWindow({
-    width: 620,
-    height: 165,
+    width: 680,
+    height: 480,
     frame: false,
     transparent: true,
     show: false,
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
+    backgroundColor: '#00000000',
     webPreferences: {
-      nodeIntegration: false,
+      nodeIntegration: true,
       contextIsolation: false
     }
   });
   
   quickAddWindow.loadFile(path.join(__dirname, 'frontend', 'quick_add.html'));
-  
-  quickAddWindow.on('blur', () => {
-    quickAddWindow.hide();
-  });
 }
 
 function createMiniProgressWindow() {
   miniProgressWindow = new BrowserWindow({
-    width: 320,
-    height: 120,
+    width: 350,
+    height: 160,
     frame: false,
     transparent: true,
     show: false,
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
+    backgroundColor: '#00000000',
     webPreferences: {
-      nodeIntegration: false,
+      nodeIntegration: true,
       contextIsolation: false
     }
   });
   
   miniProgressWindow.loadFile(path.join(__dirname, 'frontend', 'mini_progress.html'));
-  
-  ipcMain.on('mini-progress-action', (event, action) => {
-    if (action === 'show') {
-      if (mainWindow && mainWindow.isVisible() && mainWindow.isFocused()) {
-          return;
+}
+
+function notifyTrayMinimized() {
+  if (tray) {
+    try {
+      tray.displayBalloon({
+        title: 'Ledo Downloader',
+        content: 'Ledo Downloader is running in the background next to the clock.'
+      });
+    } catch (e) {}
+  }
+}
+
+function setupTray() {
+  if (tray) return;
+  const iconPath = path.join(__dirname, 'frontend', 'icon.ico');
+  if (!fs.existsSync(iconPath)) {
+    log.error('Tray icon not found at', iconPath);
+    return;
+  }
+
+  tray = new Tray(iconPath);
+
+  const toggleMainWindow = () => {
+    if (!mainWindow) return;
+    if (mainWindow.isVisible()) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
       }
+      mainWindow.focus();
+    } else {
+      mainWindow.show();
+      mainWindow.setSkipTaskbar(false);
+      mainWindow.focus();
+    }
+  };
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: 'Open Ledo Downloader',
+      click: () => toggleMainWindow()
+    },
+    {
+      label: 'Quick Add (Ctrl+Space)',
+      click: () => {
+        if (!quickAddWindow || quickAddWindow.isDestroyed()) createQuickAddWindow();
+        quickAddWindow.show();
+        quickAddWindow.focus();
+      }
+    },
+    { type: 'separator' },
+    {
+      label: 'Exit Ledo Downloader',
+      click: () => {
+        isQuiting = true;
+        app.quit();
+      }
+    }
+  ]);
+
+  tray.setToolTip('Ledo Downloader');
+  tray.setContextMenu(contextMenu);
+
+  tray.on('click', () => {
+    toggleMainWindow();
+  });
+
+  tray.on('double-click', () => {
+    toggleMainWindow();
+  });
+}
+
+function setupIpcHandlers() {
+  // Select folder dialog
+  ipcMain.handle('select-folder', async (event) => {
+    try {
+      const senderWin = event ? BrowserWindow.fromWebContents(event.sender) : null;
+      const targetWindow = senderWin || mainWindow;
+      const result = await dialog.showOpenDialog(targetWindow, {
+        properties: ['openDirectory']
+      });
+      if (!result || result.canceled || !result.filePaths || result.filePaths.length === 0) {
+        return null;
+      }
+      return result.filePaths[0];
+    } catch (err) {
+      log.error('select-folder error:', err);
+      return null;
+    }
+  });
+
+  // Default downloads path
+  ipcMain.handle('get-default-path', () => {
+    return path.join(app.getPath('downloads'), 'Ledo Downloader');
+  });
+
+  // Auto-launch startup settings
+  ipcMain.handle('get-auto-launch', () => {
+    return {
+      available: app.isPackaged,
+      enabled: app.isPackaged ? app.getLoginItemSettings().openAtLogin : false
+    };
+  });
+
+  ipcMain.handle('set-auto-launch', (_event, enabled) => {
+    if (!app.isPackaged) return false;
+    applyAutoLaunch(!!enabled);
+    store.set('launchOnStartup', !!enabled);
+    return app.getLoginItemSettings().openAtLogin;
+  });
+
+  // System Stats for hardware monitoring dashboard
+  ipcMain.handle('get-system-stats', () => {
+    try {
+      const cpus = os.cpus() || [];
+      let idle = 0;
+      let total = 0;
+      for (let i = 0, len = cpus.length; i < len; i++) {
+        const cpu = cpus[i];
+        const lastCpu = (lastCpuInfo && lastCpuInfo[i]) || cpu;
+        if (cpu && cpu.times && lastCpu && lastCpu.times) {
+          for (let type in cpu.times) {
+            total += (cpu.times[type] || 0) - (lastCpu.times[type] || 0);
+          }
+          idle += (cpu.times.idle || 0) - (lastCpu.times.idle || 0);
+        }
+      }
+      const cpuUsage = total <= 0 ? 0 : Math.min(100, Math.max(0, 100 - ~~(100 * idle / total)));
+      lastCpuInfo = cpus;
+
+      const totalMem = os.totalmem() || 1;
+      const freeMem = os.freemem() || 0;
+      const memUsage = Math.min(100, Math.max(0, 100 - ~~(100 * freeMem / totalMem)));
+
+      return {
+        cpu: cpuUsage,
+        ram: memUsage,
+        totalRam: totalMem,
+        freeRam: freeMem
+      };
+    } catch (err) {
+      log.error('get-system-stats error:', err);
+      return {
+        cpu: 0,
+        ram: 0,
+        totalRam: os.totalmem() || 0,
+        freeRam: os.freemem() || 0
+      };
+    }
+  });
+
+  // Path opening helpers
+  ipcMain.handle('open-path', async (_event, folderPath) => {
+    try {
+      if (folderPath && fs.existsSync(folderPath)) {
+        await shell.openPath(folderPath);
+        return true;
+      }
+    } catch (e) {
+      log.error('open-path error:', e);
+    }
+    return false;
+  });
+
+  ipcMain.handle('show-item-in-folder', async (_event, filePath) => {
+    try {
+      if (filePath && fs.existsSync(filePath)) {
+        shell.showItemInFolder(filePath);
+        return true;
+      }
+    } catch (e) {
+      log.error('show-item-in-folder error:', e);
+    }
+    return false;
+  });
+
+  // Notifications
+  ipcMain.on('show-notification', (_event, title, body) => {
+    try {
+      const { Notification } = require('electron');
+      if (Notification.isSupported()) {
+        new Notification({
+          title: title || 'Ledo Downloader',
+          body: body || '',
+          icon: path.join(__dirname, 'frontend', 'icon.ico')
+        }).show();
+      }
+    } catch (e) {
+      log.error('Notification error:', e);
+    }
+  });
+
+  // Main window focus request
+  ipcMain.on('show-main-window', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.setSkipTaskbar(false);
+      mainWindow.focus();
+    }
+  });
+
+  // Window Controls (minimize, maximize, close)
+  ipcMain.on('window-control', (event, action) => {
+    const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+    if (!win) return;
+
+    if (action === 'minimize') {
+      win.minimize();
+    } else if (action === 'maximize') {
+      if (win.isMaximized()) {
+        win.unmaximize();
+      } else {
+        win.maximize();
+      }
+    } else if (action === 'close') {
+      if (win === mainWindow) {
+        if (!isQuiting) {
+          mainWindow.hide();
+          mainWindow.setSkipTaskbar(true);
+          notifyTrayMinimized();
+        } else {
+          mainWindow.close();
+        }
+      } else if (win === quickAddWindow) {
+        quickAddWindow.hide();
+      } else {
+        win.close();
+      }
+    }
+  });
+
+  // Quick Add IPC
+  ipcMain.on('show-quick-add', (_event, payload) => {
+    if (!quickAddWindow || quickAddWindow.isDestroyed()) {
+      createQuickAddWindow();
+    }
+
+    const sendPayload = () => {
+      quickAddWindow.webContents.executeJavaScript(`
+        if (typeof window.updateQuickAddInfo === 'function') {
+          window.updateQuickAddInfo(${JSON.stringify(payload || {})});
+        } else {
+          window.tempMetadata = ${JSON.stringify(payload || {})};
+        }
+      `).catch(e => log.error('Failed to update quick add info:', e));
+    };
+
+    if (quickAddWindow.webContents.isLoading()) {
+      quickAddWindow.webContents.once('did-finish-load', sendPayload);
+    } else {
+      sendPayload();
+    }
+
+    quickAddWindow.show();
+    quickAddWindow.focus();
+  });
+
+  ipcMain.on('hide-quick-add', () => {
+    if (quickAddWindow && !quickAddWindow.isDestroyed()) {
+      quickAddWindow.hide();
+    }
+  });
+
+  // Mini Progress IPC
+  ipcMain.on('mini-progress-action', (_event, action) => {
+    if (!miniProgressWindow || miniProgressWindow.isDestroyed()) {
+      createMiniProgressWindow();
+    }
+    if (action === 'show') {
       const { screen } = require('electron');
       const primaryDisplay = screen.getPrimaryDisplay();
       const { width, height } = primaryDisplay.workAreaSize;
       const bounds = miniProgressWindow.getBounds();
-      
-      const x = width - bounds.width - 20;
-      const y = height - bounds.height - 20;
-      
+
+      const x = width - bounds.width - 24;
+      const y = height - bounds.height - 24;
+
       miniProgressWindow.setPosition(x, y);
+      miniProgressWindow.setAlwaysOnTop(true, 'screen-saver');
       miniProgressWindow.showInactive();
     } else if (action === 'hide') {
       miniProgressWindow.hide();
     }
   });
 
-  ipcMain.on('mini-progress-resize', (event, targetHeight) => {
+  ipcMain.on('mini-progress-resize', (_event, targetHeight) => {
+    if (!miniProgressWindow || miniProgressWindow.isDestroyed()) return;
     const bounds = miniProgressWindow.getBounds();
-    if (bounds.height !== targetHeight) {
-      const { screen } = require('electron');
-      const primaryDisplay = screen.getPrimaryDisplay();
-      const { width, height } = primaryDisplay.workAreaSize;
-      
-      const newY = height - targetHeight - 20;
-      miniProgressWindow.setBounds({
-        x: bounds.x,
-        y: newY,
-        width: bounds.width,
-        height: targetHeight
-      });
-    }
+    const { screen } = require('electron');
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width, height } = primaryDisplay.workAreaSize;
+
+    const newY = Math.max(10, height - targetHeight - 24);
+    miniProgressWindow.setBounds({
+      x: bounds.x || (width - bounds.width - 24),
+      y: newY,
+      width: bounds.width || 350,
+      height: targetHeight
+    });
   });
 }
 
 app.whenReady().then(async () => {
-  // فحص وتنزيل التحديثات تلقائيا إذا توفرت
-  autoUpdater.checkForUpdatesAndNotify();
+  // Ensure IPC handlers are registered before anything else might fail
+  setupIpcHandlers();
+  
+  try {
+    // فحص وتنزيل التحديثات تلقائيا إذا توفرت
+    autoUpdater.checkForUpdatesAndNotify();
+  } catch (err) {
+    log.warn('Auto updater error:', err);
+  }
+
+  setupTray();
 
   startPythonBackend();
   try {
@@ -352,7 +569,7 @@ app.whenReady().then(async () => {
   createMiniProgressWindow();
 
   // Register Global Shortcut
-  globalShortcut.register('CommandOrControl+Space', () => {
+  const shortcutRegistered = globalShortcut.register('CommandOrControl+Space', () => {
     if (!quickAddWindow || quickAddWindow.isDestroyed()) {
       createQuickAddWindow();
     }
@@ -363,20 +580,14 @@ app.whenReady().then(async () => {
       quickAddWindow.focus();
     }
   });
+  
+  if (!shortcutRegistered) {
+    log.error('Failed to register global shortcut CommandOrControl+Space');
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-  
-  // System Tray Setup
-  tray = new Tray(path.join(__dirname, 'frontend', 'icon.ico'));
-  const contextMenu = Menu.buildFromTemplate([
-    { label: 'Show App', click: () => { mainWindow.show(); } },
-    { label: 'Quit', click: () => { isQuiting = true; app.quit(); } }
-  ]);
-  tray.setToolTip('Ledo Downloader is running in background');
-  tray.setContextMenu(contextMenu);
-  tray.on('click', () => { mainWindow.show(); });
 
   // Clipboard Monitor (Smart Paste)
   clipboardInterval = setInterval(() => {
@@ -399,8 +610,6 @@ app.whenReady().then(async () => {
         });
     }
   }, 2000);
-  
-
 });
 
 app.on('will-quit', () => {

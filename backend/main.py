@@ -8,6 +8,7 @@ from typing import Optional, List
 import uvicorn
 import os
 import sys
+import time
 
 # FIX for [Errno 22] Invalid argument in PyInstaller --noconsole mode
 # When running without a console, standard streams are None. This causes
@@ -88,6 +89,7 @@ class DownloadRequest(BaseModel):
     quality: Optional[str] = "best"
     cookies: Optional[str] = None
     user_agent: Optional[str] = None
+    referer: Optional[str] = None
 
 class InfoRequest(BaseModel):
     url: str
@@ -96,6 +98,10 @@ class QuickAddRequest(BaseModel):
     url: str
     cookies: Optional[str] = None
     user_agent: Optional[str] = None
+    referer: Optional[str] = None
+    filename: Optional[str] = None
+    file_size: Optional[int] = None
+    mime_type: Optional[str] = None
 
 async def resolve_short_url(url: str) -> str:
     if any(short in url for short in ["vt.tiktok.com", "vm.tiktok.com", "instagram.com/reel", "t.co/", "fb.watch"]):
@@ -107,13 +113,15 @@ async def resolve_short_url(url: str) -> str:
             logger.warning(f"Failed to resolve short URL: {e}")
     return url
 
-async def check_is_direct_file(url: str, cookies: str = None, user_agent: str = None) -> dict:
+async def check_is_direct_file(url: str, cookies: str = None, user_agent: str = None, referer: str = None) -> dict:
     try:
         default_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
         headers = {
             'User-Agent': user_agent or default_ua,
             'Accept': '*/*'
         }
+        if referer:
+            headers['Referer'] = referer
         if cookies:
             headers['Cookie'] = cookies
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
@@ -196,10 +204,82 @@ async def trigger_quick_add(req: QuickAddRequest):
         "type": "open_quick_add",
         "url": req.url,
         "cookies": req.cookies,
-        "user_agent": req.user_agent
+        "user_agent": req.user_agent,
+        "referer": req.referer,
+        "filename": req.filename,
+        "file_size": req.file_size,
+        "mime_type": req.mime_type
     }
-    await manager.broadcast(orjson.dumps(payload).decode('utf-8'))
-    return {"status": "success"}
+    await manager.broadcast(orjson.dumps(payload).decode("utf-8"))
+    return {"status": "triggered"}
+
+@app.post("/api/sniff")
+async def sniff_url(req: InfoRequest):
+    # Try direct file first
+    direct_info = await check_is_direct_file(req.url)
+    if direct_info.get("is_direct"):
+        return {
+            "title": direct_info.get("title", ""),
+            "size": direct_info.get("size", 0),
+            "type": "file"
+        }
+    
+    # Try yt-dlp if it's a media site
+    try:
+        import yt_dlp
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+            'dump_single_json': True,
+            'default_search': 'auto',
+            'playlist_items': '1',
+            'cookiefile': None
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = await asyncio.to_thread(ydl.extract_info, req.url, download=False)
+            if info:
+                title = info.get('title', 'Unknown Media')
+                ext = info.get('ext', 'mp4')
+                filename = f"{title}.{ext}"
+                
+                base_size = info.get('filesize_approx', info.get('filesize', 0))
+                sizes = {"best": base_size}
+                
+                audio_size = 0
+                for f in info.get('formats', []):
+                    if f.get('acodec') != 'none' and f.get('vcodec') == 'none':
+                        s = f.get('filesize') or f.get('filesize_approx') or 0
+                        if s > audio_size:
+                            audio_size = s
+                
+                sizes['audio'] = audio_size
+                
+                best_video_sizes = {}
+                for f in info.get('formats', []):
+                    h = f.get('height')
+                    if h in [1080, 720, 480, 360]:
+                        s = f.get('filesize') or f.get('filesize_approx') or 0
+                        if s:
+                            key = f"{h}p"
+                            # Prefer a reasonable size, or max size
+                            if key not in best_video_sizes or s > best_video_sizes[key]:
+                                best_video_sizes[key] = s
+                                
+                for k, v in best_video_sizes.items():
+                    if v > 0:
+                        sizes[k] = v + audio_size
+                        
+                return {
+                    "title": filename,
+                    "size": base_size,
+                    "sizes": sizes,
+                    "type": "media"
+                }
+    except Exception as e:
+        logger.warning(f"yt-dlp sniff failed: {e}")
+        
+    return {"title": "Unknown File", "size": 0, "type": "unknown"}
 
 @app.post("/api/download")
 async def add_download(req: DownloadRequest, db: Session = Depends(get_db)):
@@ -209,7 +289,7 @@ async def add_download(req: DownloadRequest, db: Session = Depends(get_db)):
 
     is_yt_dlp = req.is_yt_dlp
     if is_yt_dlp is None:
-        direct_info = await check_is_direct_file(req.url, cookies=req.cookies, user_agent=req.user_agent)
+        direct_info = await check_is_direct_file(req.url, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer)
         is_yt_dlp = not direct_info.get("is_direct", False)
         
     def broadcast_update(dl_id):
@@ -220,7 +300,7 @@ async def add_download(req: DownloadRequest, db: Session = Depends(get_db)):
                 pass
 
     try:
-        download_id = start_download(req.url, db, use_ytdlp=is_yt_dlp, on_update=broadcast_update, save_path=req.save_path, quality=req.quality, cookies=req.cookies, user_agent=req.user_agent)
+        download_id = start_download(req.url, db, use_ytdlp=is_yt_dlp, on_update=broadcast_update, save_path=req.save_path, quality=req.quality, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer)
         logger.success(f"Download started successfully with ID: {download_id}")
         return {"status": "started", "id": download_id}
     except Exception as e:
@@ -247,6 +327,38 @@ async def pause_download(db: Session = Depends(get_db), download_id: str = ""):
         return {"status": "pausing"}
     
     logger.warning(f"Download ID {download_id} not found for pausing.")
+    return {"status": "not_found"}
+
+@app.post("/api/resume/")
+@app.post("/api/resume/{download_id}")
+async def resume_download(db: Session = Depends(get_db), download_id: str = ""):
+    if not download_id:
+        return {"status": "not_found"}
+    logger.info(f"Resume requested for ID: {download_id}")
+    db_rec = db.query(DownloadRecord).filter(DownloadRecord.id == download_id).first()
+    if db_rec:
+        def broadcast_update(dl_id):
+            if app_loop and not app_loop.is_closed():
+                try:
+                    asyncio.run_coroutine_threadsafe(broadcast_downloads(), app_loop)
+                except Exception:
+                    pass
+
+        try:
+            start_download(
+                db_rec.url, 
+                db, 
+                use_ytdlp=db_rec.is_yt_dlp, 
+                on_update=broadcast_update,
+                existing_id=download_id
+            )
+            db_rec.status = "starting"
+            db.commit()
+            asyncio.create_task(broadcast_downloads())
+            return {"status": "resumed"}
+        except Exception as e:
+            logger.error(f"Failed to resume download {download_id}: {e}")
+            return {"status": "error", "message": str(e)}
     return {"status": "not_found"}
 
 @app.delete("/api/cancel/")
@@ -345,6 +457,11 @@ async def get_info(req: InfoRequest):
                 'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
             }
         }
+        
+        if 'facebook.com' in req.url or 'fb.watch' in req.url:
+            ydl_opts['force_ipv4'] = False
+            ydl_opts['legacyserverconnect'] = True
+            
         info = await concurrency.run_in_threadpool(sync_extract_info, req.url, ydl_opts)
         if not info:
             raise Exception("Failed to extract video information or unsupported site.")
@@ -469,7 +586,18 @@ async def broadcast_downloads():
         try:
             records = db.query(DownloadRecord).all()
             downloads = []
+            from downloader import get_category_dir
+            import os
             for rec in records:
+                created_at = getattr(rec, 'created_at', None)
+                if not created_at and rec.filename:
+                    cat_dir = get_category_dir(rec.filename)
+                    fp = os.path.join(cat_dir, rec.filename)
+                    if os.path.exists(fp):
+                        created_at = os.path.getctime(fp) * 1000
+                if not created_at:
+                    created_at = time.time() * 1000
+                        
                 downloads.append({
                     "id": rec.id,
                     "url": rec.url,
@@ -479,7 +607,8 @@ async def broadcast_downloads():
                     "total_size": rec.total_size,
                     "downloaded": rec.downloaded,
                     "filename": rec.filename,
-                    "error_message": rec.error_message
+                    "error_message": rec.error_message,
+                    "created_at": created_at
                 })
             
             payload = {

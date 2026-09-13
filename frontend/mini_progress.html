@@ -3,23 +3,65 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ledo Mini Progress</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <title>Ledo Download Monitor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="mini_progress.css">
 </head>
 <body>
-    <div class="mini-container" id="mini-container">
-        <div class="mini-header">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #38bdf8;"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>
-            <span>Active Downloads</span>
-            <button class="btn-close" id="btn-close">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+    <div class="mini-widget-wrapper" id="mini-widget">
+        <!-- Expanded Card View -->
+        <div class="mini-card" id="mini-card">
+            <!-- Header Bar -->
+            <div class="card-header" id="card-header">
+                <div class="header-status">
+                    <span class="status-pulse" id="status-pulse"></span>
+                    <span class="header-title" id="header-title">Active Downloads</span>
+                    <span class="total-speed-badge" id="total-speed-badge">0 B/s</span>
+                </div>
+                <div class="header-actions">
+                    <button type="button" class="btn-icon-hdr" id="btn-open-app" title="Open Main Window">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+                    </button>
+                    <button type="button" class="btn-icon-hdr" id="btn-collapse" title="Collapse to Pill">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    </button>
+                    <button type="button" class="btn-icon-hdr close-hdr" id="btn-close" title="Hide Monitor">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Active Downloads List -->
+            <div class="downloads-container" id="downloads-container">
+                <!-- Injected dynamically -->
+            </div>
+
+            <!-- All Completed Celebration Banner (Shown when finished) -->
+            <div class="completion-banner" id="completion-banner" style="display: none;">
+                <div class="completion-icon">🎉</div>
+                <div class="completion-details">
+                    <span class="completion-title">All Downloads Complete!</span>
+                    <span class="completion-subtitle">Files saved successfully</span>
+                </div>
+                <button type="button" class="btn-open-folder" id="btn-open-default-folder" title="Open Downloads Folder">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                    <span>Open</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Collapsed Mini Pill View -->
+        <div class="mini-pill" id="mini-pill" style="display: none;" title="Click to expand">
+            <span class="status-pulse"></span>
+            <svg class="pill-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            <span class="pill-text" id="pill-text">0%</span>
+            <span class="pill-speed" id="pill-speed">0 B/s</span>
+            <button type="button" class="btn-pill-expand" id="btn-pill-expand">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="18 15 12 9 6 15"></polyline></svg>
             </button>
         </div>
-        <div class="mini-downloads" id="mini-downloads-list">
-            <!-- Downloads injected here -->
-        </div>
     </div>
+
     <script src="mini_progress.js"></script>
 </body>
 </html>

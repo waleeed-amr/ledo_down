@@ -4,51 +4,179 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ledo Quick Add</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="quick_add.css">
 </head>
 <body>
-    <div class="quick-add-container">
-        <div class="header-bar">
-            <div class="logo-badge">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="url(#grad1)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <defs><linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" style="stop-color:#818cf8"/><stop offset="100%" style="stop-color:#c084fc"/></linearGradient></defs>
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line>
-                </svg>
-                <span class="logo-text">Ledo</span>
+    <div class="window-container" id="window-container">
+        <!-- Title Bar -->
+        <div class="title-bar">
+            <div class="title-left">
+                <div class="app-logo">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="7 10 12 15 17 10"></polyline>
+                        <line x1="12" y1="15" x2="12" y2="3"></line>
+                    </svg>
+                </div>
+                <span class="app-name">Quick Add Download</span>
+                <span class="domain-badge" id="domain-badge" style="display: none;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                    <span id="domain-text">direct-link</span>
+                </span>
             </div>
-            <span class="shortcut-hint">Ctrl+Space</span>
-        </div>
-        <div class="input-wrapper">
-            <input type="text" id="url-input" placeholder="Paste a video URL and hit Enter..." autofocus spellcheck="false">
-        </div>
-        <div class="options-row">
-            <div class="quality-pills" id="quality-pills">
-                <button class="pill active" data-value="best" title="Max Quality Video">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
-                    MAX
-                </button>
-                <button class="pill" data-value="720p">720p</button>
-                <button class="pill" data-value="480p">480p</button>
-                <button class="pill" data-value="360p">360p</button>
-                <button class="pill" data-value="audio" title="Audio Only">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-                    MP3
-                </button>
-                <button class="pill" data-value="best" title="Direct File (ZIP, RAR, EXE, etc)">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
-                    FILE
+            <div class="title-right">
+                <span class="shortcut-chip" title="Shortcuts">Enter: Start | Esc: Close</span>
+                <button class="close-btn" id="btn-close" title="Close (Esc)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
             </div>
-            <button id="btn-download" class="btn-download">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-            </button>
         </div>
-        <div class="status-bar" id="status-bar" style="display: none;">
-            <div class="status-dot"></div>
-            <span id="status-text">Starting download...</span>
+
+        <!-- Main Content Body -->
+        <div class="main-body">
+            <!-- Hero Preview Card -->
+            <div class="hero-card">
+                <div class="file-icon-wrapper" id="file-icon-wrapper">
+                    <div class="file-icon-box" id="file-icon-box">
+                        <svg class="type-icon" id="hero-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                            <polyline points="13 2 13 9 20 9"></polyline>
+                        </svg>
+                    </div>
+                    <span class="ext-badge" id="ext-badge">FILE</span>
+                </div>
+                <div class="hero-details">
+                    <div class="filename-row">
+                        <input type="text" id="filename-input" class="filename-input" placeholder="File name..." spellcheck="false" title="Click to rename before download">
+                        <span class="edit-icon-hint" title="Rename file">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                        </span>
+                    </div>
+                    <div class="hero-meta">
+                        <div class="size-chip" id="size-chip">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>
+                            <span id="file-size-display">Checking size...</span>
+                        </div>
+                        <div class="category-chip" id="category-chip">
+                            <span id="category-chip-text">General</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sniffing Bar (Pulsing shimmer) -->
+            <div class="sniffing-bar" id="sniffing-loader" style="display: none;">
+                <div class="sniff-spinner"></div>
+                <span>Analyzing server & sniffing file info...</span>
+            </div>
+
+            <!-- Error Banner -->
+            <div class="error-banner" id="error-banner" style="display: none;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                <span id="error-text">Failed to start download.</span>
+                <button type="button" class="btn-retry" id="btn-retry">Retry</button>
+            </div>
+
+            <!-- Form Sections -->
+            <div class="form-grid">
+                <!-- URL Row -->
+                <div class="form-group">
+                    <label class="form-label" for="url-input">Source URL</label>
+                    <div class="input-with-action">
+                        <input type="text" id="url-input" class="form-input readonly-input" readonly placeholder="https://..." spellcheck="false">
+                        <button type="button" class="action-btn" id="btn-copy-url" title="Copy URL">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Category & Quality Controls -->
+                <div class="form-row-split">
+                    <div class="form-group flex-1">
+                        <label class="form-label" for="category-select">Category</label>
+                        <div class="custom-select-wrapper">
+                            <select id="category-select" class="form-select">
+                                <option value="General">📂 General</option>
+                                <option value="Programs">⚡ Programs (.exe, .msi)</option>
+                                <option value="Compressed">📦 Compressed (.zip, .rar)</option>
+                                <option value="Video">🎬 Video (.mp4, .mkv)</option>
+                                <option value="Audio">🎵 Audio (.mp3, .wav)</option>
+                                <option value="Documents">📄 Documents (.pdf, .doc)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Quality Row (Shown for Video / Audio) -->
+                    <div class="form-group flex-1" id="quality-row" style="display: none;">
+                        <label class="form-label" for="quality-select">Quality / Format</label>
+                        <div class="custom-select-wrapper">
+                            <select id="quality-select" class="form-select">
+                                <option value="best">⚡ Best Quality (Highest)</option>
+                                <option value="1080p">🎬 1080p Full HD</option>
+                                <option value="720p">📺 720p HD</option>
+                                <option value="480p">📱 480p SD</option>
+                                <option value="360p">📱 360p Low</option>
+                                <option value="audio">🎵 Audio Only (MP3)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Save As Directory Row -->
+                <div class="form-group">
+                    <label class="form-label" for="save-path-input">Save Location</label>
+                    <div class="input-with-action">
+                        <input type="text" id="save-path-input" class="form-input" placeholder="Select download directory..." spellcheck="false">
+                        <button type="button" class="action-btn" id="btn-browse" title="Browse folder">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                            <span>Browse</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Options / Remember Path Row -->
+                <div class="options-row">
+                    <label class="checkbox-container">
+                        <input type="checkbox" id="remember-path" checked>
+                        <span class="custom-checkbox"></span>
+                        <span class="checkbox-label">Remember location for "<span id="lbl-category">General</span>" files</span>
+                    </label>
+
+                    <div class="threads-selector" title="Concurrent download connections">
+                        <span>Threads:</span>
+                        <select id="threads-select" class="mini-select">
+                            <option value="16" selected>16x Turbo</option>
+                            <option value="32">32x Max</option>
+                            <option value="8">8x</option>
+                            <option value="4">4x</option>
+                            <option value="1">1x (Single)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer Actions Bar -->
+        <div class="footer-bar">
+            <div class="footer-left">
+                <button type="button" class="btn btn-secondary" id="btn-download-later" title="Add to queue in paused state">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
+                    <span>Download Later</span>
+                </button>
+            </div>
+            <div class="footer-right">
+                <button type="button" class="btn btn-ghost" id="btn-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btn-start-download">
+                    <svg class="btn-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                    </svg>
+                    <span id="btn-start-text">Start Download</span>
+                </button>
+            </div>
         </div>
     </div>
+
     <script src="vendor/axios.min.js"></script>
     <script src="quick_add.js"></script>
 </body>

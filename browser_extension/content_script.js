@@ -1,6 +1,7 @@
 (function() {
     let hoveredVideo = null;
     let hideTimeout = null;
+    const ignoredVideos = new WeakSet();
 
     const container = document.createElement('div');
     container.id = 'ledo-floating-container';
@@ -13,10 +14,15 @@
     container.style.gap = '4px';
     container.style.fontFamily = '"Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif';
 
+    const topRow = document.createElement('div');
+    topRow.style.display = 'flex';
+    topRow.style.alignItems = 'center';
+    topRow.style.gap = '4px';
+
     const mainBtn = document.createElement('div');
     mainBtn.innerHTML = `
-        <img src="${chrome.runtime.getURL('icons/icon48.png')}" alt="Ledo" style="width:18px;height:18px;margin-right:8px;vertical-align:middle;display:inline-block; border-radius:4px;">
-        <span style="font-weight: 600; font-size: 13px; letter-spacing: 0.3px;">Download with Ledo ▾</span>
+        <img src="${chrome.runtime.getURL('icons/icon48.png')}" alt="Ledo" style="width:14px;height:14px;margin-right:6px;vertical-align:middle;display:inline-block; border-radius:3px;">
+        <span style="font-weight: 600; font-size: 11px; letter-spacing: 0.2px;">Download ▾</span>
     `;
     
     const btnStyle = `
@@ -24,8 +30,8 @@
         backdrop-filter: blur(12px);
         -webkit-backdrop-filter: blur(12px);
         color: #fff;
-        padding: 8px 14px;
-        border-radius: 8px;
+        padding: 5px 10px;
+        border-radius: 6px;
         cursor: pointer;
         box-shadow: 0 4px 15px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1);
         display: flex;
@@ -34,6 +40,47 @@
         border: 1px solid rgba(99, 102, 241, 0.4);
     `;
     mainBtn.style.cssText = btnStyle;
+
+    const closeBtn = document.createElement('div');
+    closeBtn.innerHTML = '×';
+    closeBtn.style.cssText = `
+        background: rgba(15, 23, 42, 0.85);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        color: #fff;
+        padding: 5px 8px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: bold;
+        line-height: 1;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1);
+        border: 1px solid rgba(99, 102, 241, 0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+    `;
+    closeBtn.addEventListener('mouseenter', () => {
+        closeBtn.style.background = 'rgba(239, 68, 68, 0.8)';
+        closeBtn.style.borderColor = 'rgba(239, 68, 68, 0.9)';
+    });
+    closeBtn.addEventListener('mouseleave', () => {
+        closeBtn.style.background = 'rgba(15, 23, 42, 0.85)';
+        closeBtn.style.borderColor = 'rgba(99, 102, 241, 0.4)';
+    });
+    closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (hoveredVideo) {
+            ignoredVideos.add(hoveredVideo);
+        }
+        container.style.display = 'none';
+        dropdown.style.display = 'none';
+        hoveredVideo = null;
+    });
+
+    topRow.appendChild(mainBtn);
+    topRow.appendChild(closeBtn);
 
     const dropdown = document.createElement('div');
     dropdown.style.display = 'none';
@@ -85,9 +132,9 @@
     dropdown.appendChild(optFile);
     dropdown.appendChild(optManual);
 
-    container.appendChild(mainBtn);
+    container.appendChild(topRow);
     container.appendChild(dropdown);
-    document.body.appendChild(container);
+    document.documentElement.appendChild(container);
 
     // Hover logic
     container.addEventListener('mouseenter', () => {
@@ -116,7 +163,7 @@
             (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom);
             
         let isHoveringMedia = false;
-        if (hoveredVideo && document.body.contains(hoveredVideo)) {
+        if (hoveredVideo && document.documentElement.contains(hoveredVideo)) {
             const vRect = hoveredVideo.getBoundingClientRect();
             isHoveringMedia = (e.clientX >= vRect.left && e.clientX <= vRect.right && e.clientY >= vRect.top && e.clientY <= vRect.bottom);
         }
@@ -130,12 +177,13 @@
                 const tag = el.tagName.toUpperCase();
                 if (['VIDEO', 'AUDIO'].includes(tag)) return true;
                 if (tag === 'A' && el.href) {
-                    return /\.(mp4|mp3|mkv|avi|mov|zip|rar|exe|iso|pdf|apk|7z|tar|gz)(\?.*)?$/i.test(el.href);
+                    if (el.hasAttribute('download')) return true;
+                    return /\.(mp4|mp3|mkv|avi|mov|wmv|flv|webm|ogg|wav|flac|m4a|aac|zip|rar|exe|msi|iso|pdf|apk|7z|tar|gz|bz2|xz|zst|dmg|pkg|deb|rpm|jar|doc|docx|xls|xlsx|ppt|pptx|txt|rtf|csv|epub|mobi|jpg|jpeg|png|gif|webp|svg|bmp|tiff|psd|ai|eps|ttf|otf|woff|woff2|cab)(\?.*)?$/i.test(el.href);
                 }
                 return false;
             });
             
-            if (media) {
+            if (media && !ignoredVideos.has(media)) {
                 hoveredVideo = media;
                 isHoveringMedia = true;
                 const mRect = hoveredVideo.getBoundingClientRect();
@@ -283,9 +331,12 @@
         toast.style.transition = 'all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
         toast.style.opacity = '0';
         toast.style.transform = 'translateY(20px) scale(0.9)';
+        toast.style.wordBreak = 'break-word';
+        toast.style.overflowWrap = 'break-word';
+        toast.style.maxWidth = '300px';
         toast.innerHTML = message;
         
-        document.body.appendChild(toast);
+        document.documentElement.appendChild(toast);
         
         requestAnimationFrame(() => {
             toast.style.opacity = '1';

@@ -306,6 +306,7 @@
         <button class="tab-btn active" data-target="tab-smart">Smart Detect</button>
         <button class="tab-btn" data-target="tab-current">Current Tab</button>
         <button class="tab-btn" data-target="tab-status">Active Tasks</button>
+        <button class="tab-btn" data-target="tab-settings">Settings</button>
     </div>
 
     <div class="content">
@@ -360,6 +361,24 @@
                 </svg>
                 <div style="color: var(--danger);">App is Offline</div>
                 <p style="font-size: 11px; margin-top: 8px;">Please start Ledo Downloader desktop application.</p>
+            </div>
+        </div>
+        
+        <!-- Tab 4: Settings -->
+        <div id="tab-settings" class="tab-pane">
+            <div style="background: var(--surface); padding: 15px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-weight: 600; font-size: 13px;">Intercept Downloads</div>
+                        <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">Automatically capture downloads</div>
+                    </div>
+                    <label style="position: relative; display: inline-block; width: 40px; height: 22px;">
+                        <input type="checkbox" id="toggle-intercept" checked style="opacity: 0; width: 0; height: 0;">
+                        <span style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--surface); border: 1px solid var(--border); transition: .4s; border-radius: 22px;">
+                            <span id="toggle-slider" style="position: absolute; content: ''; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: var(--primary); transition: .4s; border-radius: 50%; transform: translateX(18px);"></span>
+                        </span>
+                    </label>
+                </div>
             </div>
         </div>
     </div>

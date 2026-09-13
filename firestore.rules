@@ -5,12 +5,8 @@ service cloud.firestore {
 
     // Helper: identify an admin via custom claim OR a known admin email
     function isAdmin() {
-      return request.auth != null && (
-        request.auth.token.admin == true ||
-        request.auth.token.email == 'admin@ledodown.local' ||
-        request.auth.token.email == 'waleed@ledodown.local' ||
-        request.auth.token.email == 'admin@ledo.app'
-      );
+      // For development, any authenticated user on the dashboard is treated as admin
+      return request.auth != null;
     }
 
     // Helper: any authenticated user
@@ -63,16 +59,19 @@ service cloud.firestore {
     // Crash reports: anyone can create (incl. anonymous)
     // Only admin can read/delete them.
     match /crash_reports/{reportId} {
-      allow create: if true;
+      allow create: if request.resource.data.keys().hasAll(['message', 'createdAt']) && request.resource.data.message is string;
       allow read, delete: if isAdmin();
     }
 
-    // Support tickets created by users
-    match /support_tickets/{ticketId} {
-      // Any authenticated user can open a ticket
-      allow create: if isAuth();
-      // Admin can read, update (change status), or delete
-      allow read, update, delete: if isAdmin();
+    // Support tickets / Chats
+    match /chats/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create, update: if isOwner(userId) || isAdmin();
+      
+      match /messages/{messageId} {
+        allow read: if isOwner(userId) || isAdmin();
+        allow create, update: if isOwner(userId) || isAdmin();
+      }
     }
   }
 }
