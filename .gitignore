@@ -22,11 +22,14 @@ __pycache__/
 .venv/
 venv/
 
-# --- Build outputs (Electron / mobile / PyInstaller) ---
+# --- Build outputs (Electron / mobile / PyInstaller / admin website) ---
 build/
 dist/
 dist 1/
 out/
+my website/
+
+
 *.spec
 
 # --- Generated / runtime data ---
