@@ -1,6 +1,6 @@
 ### 🚀 **تحديث جديد | New Release**
 
-# **Ledo Downloader v3.9.2018**
+# **Ledo Downloader v3.9.2020**
 
 ---
 
@@ -26,5 +26,9 @@
 
 ---
 
-> 💡 **ملاحظة:** قم بتحميل ملف الـ Setup المرفق بالأسفل لتثبيت التحديث واستكشاف الميزات الجديدة!
-> 💡 **Note:** Download the setup file attached below to install the update and explore the new features!
+### 📥 **للتحميل | Download**
+
+> **للتحميل ادخل هنا واختار أعلى نسخة:**
+> 🔗 [https://github.com/waleeed-amr/ledo_down/releases](https://github.com/waleeed-amr/ledo_down/releases)
+>
+> **To download, click the link above and select the latest/top release version!**
