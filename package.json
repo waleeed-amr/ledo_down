@@ -1,6 +1,6 @@
 {
   "name": "ledo-downloader",
-  "version": "3.9.2013",
+  "version": "3.9.2014",
   "description": "Ledo Downloader - High Speed Download Manager",
   "main": "main.js",
   "scripts": {
