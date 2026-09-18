@@ -132,6 +132,9 @@
         // Chat System
         sendChatMessage: async (messageText) => {
             if (!auth.currentUser) return { success: false, error: "Not logged in" };
+            const text = String(messageText || '').trim();
+            if (!text) return { success: false, error: "Message cannot be empty" };
+            if (text.length > 3000) return { success: false, error: "Message is too long (maximum 3000 characters)" };
             try {
                 const uid = auth.currentUser.uid;
                 const chatRef = db.collection("chats").doc(uid);
@@ -141,6 +144,8 @@
                     userId: uid,
                     email: auth.currentUser.email || 'anon@local',
                     lastUpdated: firebase.firestore.FieldValue.serverTimestamp(),
+                    lastMessage: text,
+                    lastSender: 'user',
                     unreadAdmin: true, // admin needs to read this
                     unreadUser: false
                 }, { merge: true });
@@ -148,7 +153,7 @@
                 // Add message
                 await chatRef.collection("messages").add({
                     sender: uid,
-                    text: messageText,
+                    text,
                     createdAt: firebase.firestore.FieldValue.serverTimestamp(),
                     isAdmin: false
                 });
@@ -160,6 +165,7 @@
 
         listenToChat: (callback) => {
             if (!auth.currentUser) return null;
+            let receivedInitialSnapshot = false;
             return db.collection("chats")
                 .doc(auth.currentUser.uid)
                 .collection("messages")
@@ -170,10 +176,26 @@
                         snapshot.forEach((doc) => {
                             messages.push({ id: doc.id, ...doc.data() });
                         });
-                        callback(messages);
+                        const addedMessages = receivedInitialSnapshot
+                            ? snapshot.docChanges().filter(change => change.type === 'added').map(change => ({ id: change.doc.id, ...change.doc.data() }))
+                            : [];
+                        callback(messages, addedMessages, !receivedInitialSnapshot);
+                        receivedInitialSnapshot = true;
                     },
                     (error) => console.error("Chat listen error:", error)
                 );
+        },
+
+        markChatRead: async () => {
+            if (!auth.currentUser) return;
+            try {
+                await db.collection("chats").doc(auth.currentUser.uid).set({
+                    unreadUser: false,
+                    lastReadAt: firebase.firestore.FieldValue.serverTimestamp()
+                }, { merge: true });
+            } catch (error) {
+                console.debug("Could not mark chat read:", error);
+            }
         },
 
         // Listen to Inbox Messages
@@ -219,6 +241,23 @@
                 console.error("Failed to upload crash report:", error);
                 return { success: false, error: error.message };
             }
+        },
+
+        // Listen to User Document for status changes (e.g. bans, deletions)
+        listenToUserStatus: (callback) => {
+            if (!auth.currentUser || auth.currentUser.isAnonymous) return null;
+            return db.collection("users")
+                .doc(auth.currentUser.uid)
+                .onSnapshot(
+                    (doc) => {
+                        // Pass doc.data() if exists, else null (deleted)
+                        callback(doc.exists ? doc.data() : null, null);
+                    },
+                    (error) => {
+                        console.error("User status listen error:", error);
+                        callback(null, error);
+                    }
+                );
         }
     };
 

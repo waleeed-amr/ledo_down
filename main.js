@@ -7,6 +7,11 @@ const Store = require('electron-store'); // 3. electron-store: لحفظ الإع
 const { autoUpdater } = require('electron-updater'); // 4. electron-updater: للتحديث التلقائي
 const contextMenu = require('electron-context-menu'); // 5. electron-context-menu: لقائمة الزر الأيمن
 const os = require('os');
+const { checkIntegrity } = require('./integrity_check.js');
+
+// Memory optimization flags: cap V8 heap and prevent renderer background memory buildup
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=160');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 // تهيئة الإعدادات
 const store = new Store();
@@ -60,6 +65,7 @@ let tray = null;
 let isQuiting = false;
 let clipboardInterval = null;
 let lastClipboard = '';
+let smartClipboardEnabled = true;
 let lastCpuInfo = os.cpus();
 
 const gotTheLock = app.requestSingleInstanceLock();
@@ -92,7 +98,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      backgroundThrottling: true,
+      backgroundThrottling: false,
       sandbox: false
     }
   });
@@ -235,7 +241,8 @@ function createMiniProgressWindow() {
     backgroundColor: '#00000000',
     webPreferences: {
       nodeIntegration: true,
-      contextIsolation: false
+      contextIsolation: false,
+      backgroundThrottling: false
     }
   });
   
@@ -338,17 +345,62 @@ function setupIpcHandlers() {
 
   // Auto-launch startup settings
   ipcMain.handle('get-auto-launch', () => {
-    return {
-      available: app.isPackaged,
-      enabled: app.isPackaged ? app.getLoginItemSettings().openAtLogin : false
-    };
+    try {
+      const loginSettings = app.getLoginItemSettings();
+      return {
+        available: true,
+        enabled: !!loginSettings.openAtLogin
+      };
+    } catch (e) {
+      log.error('get-auto-launch error:', e);
+      return { available: false, enabled: false };
+    }
   });
 
   ipcMain.handle('set-auto-launch', (_event, enabled) => {
-    if (!app.isPackaged) return false;
-    applyAutoLaunch(!!enabled);
-    store.set('launchOnStartup', !!enabled);
-    return app.getLoginItemSettings().openAtLogin;
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: !!enabled,
+        openAsHidden: false
+      });
+      return app.getLoginItemSettings().openAtLogin;
+    } catch (e) {
+      log.error('set-auto-launch error:', e);
+      return false;
+    }
+  });
+
+  // Smart clipboard control
+  ipcMain.on('set-smart-clipboard', (_event, enabled) => {
+    smartClipboardEnabled = !!enabled;
+    log.info(`Smart clipboard monitor set to: ${smartClipboardEnabled}`);
+  });
+
+  // Open Extension Folder
+  ipcMain.handle('open-extension-folder', async () => {
+    try {
+      const extPath = path.join(__dirname, 'browser_extension');
+      if (fs.existsSync(extPath)) {
+        await shell.openPath(extPath);
+        return true;
+      }
+    } catch (e) {
+      log.error('open-extension-folder error:', e);
+    }
+    return false;
+  });
+
+  // Open External Links
+  ipcMain.handle('open-external', async (_event, url) => {
+    try {
+      if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+        await shell.openExternal(url);
+        return true;
+      }
+    } catch (e) {
+      log.error('open-external error:', e);
+    }
+    return false;
   });
 
   // System Stats for hardware monitoring dashboard
@@ -510,19 +562,30 @@ function setupIpcHandlers() {
       createMiniProgressWindow();
     }
     if (action === 'show') {
-      const { screen } = require('electron');
-      const primaryDisplay = screen.getPrimaryDisplay();
-      const { width, height } = primaryDisplay.workAreaSize;
-      const bounds = miniProgressWindow.getBounds();
+      const doShow = () => {
+        if (!miniProgressWindow || miniProgressWindow.isDestroyed()) return;
+        const { screen } = require('electron');
+        const primaryDisplay = screen.getPrimaryDisplay();
+        const { width, height } = primaryDisplay.workAreaSize;
+        const bounds = miniProgressWindow.getBounds();
 
-      const x = width - bounds.width - 24;
-      const y = height - bounds.height - 24;
+        const x = width - bounds.width - 24;
+        const y = height - bounds.height - 24;
 
-      miniProgressWindow.setPosition(x, y);
-      miniProgressWindow.setAlwaysOnTop(true, 'screen-saver');
-      miniProgressWindow.showInactive();
+        miniProgressWindow.setPosition(x, y);
+        miniProgressWindow.setAlwaysOnTop(true, 'screen-saver');
+        miniProgressWindow.showInactive();
+      };
+
+      if (miniProgressWindow.webContents.isLoading()) {
+        miniProgressWindow.webContents.once('did-finish-load', doShow);
+      } else {
+        doShow();
+      }
     } else if (action === 'hide') {
-      miniProgressWindow.hide();
+      if (miniProgressWindow && !miniProgressWindow.isDestroyed()) {
+        miniProgressWindow.hide();
+      }
     }
   });
 
@@ -544,6 +607,12 @@ function setupIpcHandlers() {
 }
 
 app.whenReady().then(async () => {
+  // Run integrity check before proceeding
+  if (!checkIntegrity()) {
+    app.quit();
+    return;
+  }
+
   // Ensure IPC handlers are registered before anything else might fail
   setupIpcHandlers();
   
@@ -591,8 +660,9 @@ app.whenReady().then(async () => {
 
   // Clipboard Monitor (Smart Paste)
   clipboardInterval = setInterval(() => {
+    if (!smartClipboardEnabled) return;
     const text = clipboard.readText();
-    if (text !== lastClipboard && (text.includes('tiktok.com') || text.includes('youtube.com') || text.includes('instagram.com') || text.includes('fb.watch') || text.includes('x.com'))) {
+    if (text !== lastClipboard && (text.includes('tiktok.com') || text.includes('youtube.com') || text.includes('instagram.com') || text.includes('fb.watch') || text.includes('x.com') || text.includes('spotify.com'))) {
         lastClipboard = text;
         dialog.showMessageBox(mainWindow, {
             type: 'question',

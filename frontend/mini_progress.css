@@ -62,7 +62,7 @@ html, body {
     flex-direction: column;
     overflow: hidden;
     height: 100%;
-    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: background 0.2s, border-color 0.2s;
 }
 
 /* Card Header */
@@ -264,7 +264,7 @@ html, body {
     background: var(--accent-gradient);
     border-radius: 3px;
     width: 0%;
-    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: width 0.1s linear;
     position: relative;
     box-shadow: 0 0 8px var(--accent-glow);
 }

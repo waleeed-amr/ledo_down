@@ -36,6 +36,8 @@ const btnStartText = document.getElementById('btn-start-text');
 const btnDownloadLater = document.getElementById('btn-download-later');
 const btnBrowse = document.getElementById('btn-browse');
 const btnCopyUrl = document.getElementById('btn-copy-url');
+const btnPasteUrl = document.getElementById('btn-paste-url');
+const btnAnalyzeUrl = document.getElementById('btn-analyze-url');
 
 let currentMetadata = {
     url: '',
@@ -47,14 +49,66 @@ let currentMetadata = {
     user_agent: null,
     type: 'unknown'
 };
+let sniffTimer = null;
+let sniffRequestId = 0;
+let userSelectedSavePath = false;
 
 const CATEGORIES = {
-    'Programs': ['.exe', '.msi', '.apk', '.dmg', '.pkg', '.appimage', '.deb', '.rpm', '.iso'],
-    'Compressed': ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.zst', '.tgz'],
-    'Video': ['.mp4', '.mkv', '.avi', '.webm', '.mov', '.flv', '.wmv', '.m4v', '.3gp'],
-    'Audio': ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.wma', '.opus'],
-    'Documents': ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.csv', '.epub']
+    'Programs': ['.exe', '.msi', '.msix', '.appx', '.apk', '.aab', '.xapk', '.dmg', '.pkg', '.deb', '.rpm', '.appimage', '.snap', '.flatpak', '.jar', '.run', '.bin', '.iso'],
+    'Compressed': ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.zst', '.tgz', '.tbz2', '.txz', '.cab', '.img', '.vhd', '.vmdk', '.wim'],
+    'Video': ['.mp4', '.mkv', '.avi', '.webm', '.mov', '.flv', '.wmv', '.m4v', '.3gp', '.3g2', '.ts', '.mts', '.m2ts', '.vob', '.ogv', '.mpg', '.mpeg'],
+    'Audio': ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.wma', '.opus', '.aiff', '.aif', '.mid', '.midi', '.ape', '.alac'],
+    'Documents': ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.csv', '.tsv', '.epub', '.mobi', '.rtf', '.odt', '.ods', '.odp']
 };
+
+const KNOWN_EXTENSIONS = new Set([
+    // Programs & Installers
+    '.exe', '.msi', '.msix', '.appx', '.appimage', '.dmg', '.pkg', '.deb',
+    '.rpm', '.apk', '.aab', '.xapk', '.snap', '.flatpak', '.run', '.bin',
+    '.jar', '.war', '.ear',
+    // Archives & Compressed
+    '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.zst', '.lz',
+    '.lzma', '.tgz', '.tbz2', '.txz', '.cab', '.iso', '.img', '.vhd',
+    '.vmdk', '.ova', '.qcow2', '.wim', '.z', '.lz4', '.br', '.zstd',
+    // Documents
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt',
+    '.ods', '.odp', '.rtf', '.txt', '.csv', '.tsv', '.epub', '.mobi',
+    '.azw3', '.djvu', '.xps', '.pages', '.numbers', '.key',
+    // Video
+    '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
+    '.3gp', '.3g2', '.ts', '.mts', '.m2ts', '.vob', '.ogv', '.mpg',
+    '.mpeg', '.divx', '.asf', '.rm', '.rmvb', '.f4v',
+    // Audio
+    '.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.wma', '.opus',
+    '.aiff', '.aif', '.mid', '.midi', '.ape', '.alac', '.dsf', '.dff',
+    '.tak', '.tta', '.mka', '.ac3', '.dts', '.pcm',
+    // Images
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.ico',
+    '.tiff', '.tif', '.psd', '.ai', '.eps', '.raw', '.cr2', '.nef',
+    '.arw', '.dng', '.heic', '.heif', '.avif', '.jxl',
+    // Fonts
+    '.ttf', '.otf', '.woff', '.woff2', '.eot',
+    // Data & Config
+    '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
+    '.sql', '.db', '.sqlite', '.sqlite3', '.bak', '.dat', '.log',
+    // Misc
+    '.torrent', '.nfo', '.srt', '.sub', '.ass', '.vtt', '.ics',
+    '.vcf', '.gpx', '.kml', '.kmz'
+]);
+
+const SERVER_SCRIPT_EXTENSIONS = new Set([
+    '.php', '.asp', '.aspx', '.jsp', '.jspx', '.do', '.action', '.cgi',
+    '.pl', '.cfm', '.html', '.htm', '.shtml', '.xhtml'
+]);
+
+function looksLikeFilename(val) {
+    if (!val || typeof val !== 'string' || val.length < 3) return false;
+    const clean = val.split('?')[0].split('#')[0];
+    const base = path.basename(clean);
+    if (!base || base.length < 3) return false;
+    const ext = path.extname(base).toLowerCase();
+    return KNOWN_EXTENSIONS.has(ext) && !SERVER_SCRIPT_EXTENSIONS.has(ext);
+}
 
 const ICONS = {
     'Programs': `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>`,
@@ -133,6 +187,179 @@ function sanitizeFilename(name) {
     return name.replace(/[<>:"/\\|?*]/g, '_').trim();
 }
 
+function normaliseUrl(value) {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return '';
+    const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    try {
+        const parsed = new URL(candidate);
+        return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : '';
+    } catch (e) {
+        return '';
+    }
+}
+
+const STREAMING_DOMAINS = new Set([
+    'youtube.com', 'youtu.be', 'tiktok.com', 'instagram.com', 'facebook.com',
+    'fb.watch', 'twitter.com', 'x.com', 'twitch.tv', 'vimeo.com',
+    'dailymotion.com', 'soundcloud.com', 'reddit.com'
+]);
+
+function filenameFromUrl(url) {
+    try {
+        const parsed = new URL(url);
+        const hostname = (parsed.hostname || '').toLowerCase();
+        const isStreaming = Array.from(STREAMING_DOMAINS).some(d => hostname.includes(d));
+        if (isStreaming) {
+            // Streaming media URLs must wait for yt-dlp sniffer for proper video title
+            return '';
+        }
+
+        const candidates = [];
+
+        // 1. Scan ALL query parameters for filenames (Broadcom, S3, Azure, Google Cloud, CDN, etc.)
+        for (const [key, rawVal] of parsed.searchParams.entries()) {
+            if (!rawVal || rawVal.length < 3) continue;
+            const keyLower = key.toLowerCase();
+
+            // Check for embedded Content-Disposition (e.g. S3 response-content-disposition)
+            const utfMatch = rawVal.match(/filename\*=UTF-8''(.+?)(?:;|$|&)/i);
+            if (utfMatch) {
+                const decoded = decodeURIComponent(utfMatch[1]).replace(/["']/g, '').trim();
+                if (looksLikeFilename(decoded)) {
+                    candidates.push({ score: 200, name: decoded });
+                    continue;
+                }
+            }
+            const regMatch = rawVal.match(/filename="?([^";&]+)"?/i);
+            if (regMatch) {
+                const decoded = decodeURIComponent(regMatch[1]).replace(/["']/g, '').trim();
+                if (looksLikeFilename(decoded)) {
+                    candidates.push({ score: 200, name: decoded });
+                    continue;
+                }
+            }
+
+            // Decode value and strip secondary query string
+            let decoded = '';
+            try { decoded = decodeURIComponent(rawVal); } catch(e) { decoded = rawVal; }
+            const cleanVal = decoded.split('?')[0].split('#')[0];
+            const base = path.basename(cleanVal);
+
+            if (base && base.length >= 3 && looksLikeFilename(base)) {
+                let score = 10;
+                if (['file', 'filename', 'name', 'dl', 'download', 'package', 'asset', 'path'].some(k => keyLower.includes(k))) {
+                    score += 50;
+                }
+                const ext = path.extname(base).toLowerCase();
+                if (CATEGORIES['Programs'].includes(ext) || CATEGORIES['Compressed'].includes(ext)) {
+                    score += 30;
+                }
+                score += Math.min(base.length, 30);
+                candidates.push({ score, name: base });
+            }
+        }
+
+        // 2. Inspect path basename
+        let pathnameBase = '';
+        try {
+            const decPath = decodeURIComponent(parsed.pathname);
+            pathnameBase = path.basename(decPath);
+        } catch(e) {
+            pathnameBase = path.basename(parsed.pathname);
+        }
+
+        const pathExt = path.extname(pathnameBase).toLowerCase();
+        if (pathnameBase && pathnameBase.length >= 3 && !SERVER_SCRIPT_EXTENSIONS.has(pathExt)) {
+            if (KNOWN_EXTENSIONS.has(pathExt)) {
+                // Real file in URL path
+                candidates.push({ score: 60 + Math.min(pathnameBase.length, 20), name: pathnameBase });
+            }
+        }
+
+        if (candidates.length > 0) {
+            candidates.sort((a, b) => b.score - a.score);
+            return sanitizeFilename(candidates[0].name);
+        }
+
+        // Fallback: If path has any name and is not a script or generic keyword
+        const genericWords = new Set(['download', 'file', 'get', 'index', 'view', 'watch', 'api', 'v1', 'v2', 'stream', 'play']);
+        if (pathnameBase && pathnameBase !== '/' && pathnameBase.length > 1 && !SERVER_SCRIPT_EXTENSIONS.has(pathExt) && !genericWords.has(pathnameBase.toLowerCase())) {
+            return sanitizeFilename(pathnameBase);
+        }
+
+        return '';
+    } catch (e) {
+        return '';
+    }
+}
+
+function setAnalyzing(isAnalyzing) {
+    sniffingLoader.style.display = isAnalyzing ? 'flex' : 'none';
+    if (btnAnalyzeUrl) btnAnalyzeUrl.disabled = isAnalyzing;
+    if (btnPasteUrl) btnPasteUrl.disabled = isAnalyzing;
+}
+
+async function analyzeUrl(value = urlInput.value) {
+    const url = normaliseUrl(value);
+    if (!url) {
+        errorText.innerText = 'Paste a valid http or https link first.';
+        errorBanner.style.display = 'flex';
+        return false;
+    }
+
+    const requestId = ++sniffRequestId;
+    errorBanner.style.display = 'none';
+    userSelectedSavePath = false;
+    currentMetadata = {
+        url,
+        filename: filenameFromUrl(url),
+        file_size: null,
+        sizes: null,
+        mime_type: '',
+        cookies: null,
+        user_agent: null,
+        type: 'unknown'
+    };
+    updateUI();
+    setAnalyzing(true);
+
+    try {
+        const res = await axios.post(`${API_URL}/sniff`, { 
+            url,
+            cookies: currentMetadata.cookies || null,
+            user_agent: currentMetadata.user_agent || null,
+            referer: currentMetadata.referer || null
+        }, { timeout: 15000 });
+        if (requestId !== sniffRequestId) return false;
+        const info = res.data || {};
+        if (info.title && info.title !== 'Unknown File') currentMetadata.filename = info.title;
+        currentMetadata.file_size = info.size || null;
+        currentMetadata.sizes = info.sizes || null;
+        currentMetadata.mime_type = info.mime_type || '';
+        currentMetadata.type = info.type || 'file';
+        updateUI();
+        return true;
+    } catch (e) {
+        if (requestId === sniffRequestId) {
+            // A direct link can still be downloaded even when its server does
+            // not expose metadata, so keep the form usable and explain why.
+            errorText.innerText = 'Could not read details. You can still start this direct download.';
+            errorBanner.style.display = 'flex';
+        }
+        return false;
+    } finally {
+        if (requestId === sniffRequestId) setAnalyzing(false);
+    }
+}
+
+function scheduleUrlAnalysis() {
+    clearTimeout(sniffTimer);
+    const rawUrl = urlInput.value.trim();
+    if (!rawUrl) return;
+    sniffTimer = setTimeout(() => analyzeUrl(rawUrl), 650);
+}
+
 function resetFormState() {
     // Reset buttons
     btnStartDownload.disabled = false;
@@ -164,7 +391,7 @@ function updateUI() {
         domainBadge.style.display = 'none';
     }
 
-    const filename = sanitizeFilename(currentMetadata.filename || (currentMetadata.url ? path.basename(new URL(currentMetadata.url).pathname) : 'downloaded_file'));
+    const filename = sanitizeFilename(currentMetadata.filename || filenameFromUrl(currentMetadata.url) || 'downloaded_file');
     filenameInput.value = filename;
 
     // Detect extension
@@ -191,8 +418,10 @@ function updateUI() {
     fileSizeDisplay.innerText = formatBytes(sizeToShow);
 
     // Update Save Path
-    const targetDir = getCategorySaveDir(cat);
-    savePathInput.value = path.join(targetDir, filename);
+    if (!userSelectedSavePath) {
+        const targetDir = getCategorySaveDir(cat);
+        savePathInput.value = path.join(targetDir, filename);
+    }
 
     // Media quality row visibility
     const isMedia = (cat === 'Video' || cat === 'Audio' || currentMetadata.type === 'media');
@@ -213,8 +442,10 @@ categorySelect.addEventListener('change', (e) => {
     fileIconBox.innerHTML = ICONS[cat] || ICONS['General'];
 
     const filename = filenameInput.value || 'downloaded_file';
-    const targetDir = getCategorySaveDir(cat);
-    savePathInput.value = path.join(targetDir, filename);
+    if (!userSelectedSavePath) {
+        const targetDir = getCategorySaveDir(cat);
+        savePathInput.value = path.join(targetDir, filename);
+    }
 
     const isMedia = (cat === 'Video' || cat === 'Audio');
     qualityRow.style.display = isMedia ? 'flex' : 'none';
@@ -250,6 +481,10 @@ filenameInput.addEventListener('input', () => {
     savePathInput.value = path.join(currentDir, fn);
 });
 
+savePathInput.addEventListener('input', () => {
+    userSelectedSavePath = true;
+});
+
 // Browse folder
 btnBrowse.addEventListener('click', async () => {
     const res = await ipcRenderer.invoke('select-folder');
@@ -257,10 +492,33 @@ btnBrowse.addEventListener('click', async () => {
         const selectedDir = res;
         const fn = sanitizeFilename(filenameInput.value);
         savePathInput.value = path.join(selectedDir, fn);
+        userSelectedSavePath = true;
         if (rememberPath.checked) {
             saveCategoryPath(categorySelect.value, selectedDir);
         }
     }
+});
+
+urlInput.addEventListener('input', scheduleUrlAnalysis);
+urlInput.addEventListener('paste', () => setTimeout(scheduleUrlAnalysis, 0));
+urlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        clearTimeout(sniffTimer);
+        analyzeUrl();
+    }
+});
+
+btnPasteUrl.addEventListener('click', () => {
+    const text = clipboard.readText().trim();
+    if (!text) return;
+    urlInput.value = text;
+    analyzeUrl(text);
+});
+
+btnAnalyzeUrl.addEventListener('click', () => {
+    clearTimeout(sniffTimer);
+    analyzeUrl();
 });
 
 // Copy URL Button
@@ -305,12 +563,15 @@ async function handleStartDownload(isLater = false) {
         quality = qualitySelect.value;
     }
 
+    const isDirect = (cat === 'Programs' || cat === 'Compressed' || cat === 'Documents' || currentMetadata.type === 'file');
     const payload = {
         url: currentMetadata.url,
         save_path: path.dirname(savePathInput.value),
         quality: quality,
+        is_yt_dlp: isDirect ? false : (cat === 'Video' || cat === 'Audio' ? null : false),
         cookies: currentMetadata.cookies || null,
-        user_agent: currentMetadata.user_agent || null
+        user_agent: currentMetadata.user_agent || null,
+        referer: currentMetadata.referer || null
     };
 
     try {
@@ -365,6 +626,11 @@ document.addEventListener('keydown', (e) => {
 
 // Exposed function called by main.js
 window.updateQuickAddInfo = async function(metadata) {
+    // Retrigger popup animation for a snappy feel
+    windowContainer.style.animation = 'none';
+    windowContainer.offsetHeight;
+    windowContainer.style.animation = 'windowPop 0.2s cubic-bezier(0.16, 1, 0.3, 1)';
+
     // 1. Full State Reset
     resetFormState();
 
@@ -379,14 +645,14 @@ window.updateQuickAddInfo = async function(metadata) {
         user_agent: metadata.user_agent || null,
         type: 'unknown'
     };
+    userSelectedSavePath = false;
 
-    // If filename is missing, attempt to extract from URL
+    // If filename is missing, attempt to extract from URL (including query params)
     if (!currentMetadata.filename && currentMetadata.url) {
-        try {
-            const parsedPath = new URL(currentMetadata.url).pathname;
-            const bname = path.basename(parsedPath);
-            if (bname && bname.length > 1) currentMetadata.filename = decodeURIComponent(bname);
-        } catch(e) {}
+        const extracted = filenameFromUrl(currentMetadata.url);
+        if (extracted && extracted.length > 1) {
+            currentMetadata.filename = extracted;
+        }
     }
 
     // 3. If extension already gave filename and size, update UI immediately
@@ -401,7 +667,12 @@ window.updateQuickAddInfo = async function(metadata) {
     sniffingLoader.style.display = 'flex';
     
     try {
-        const res = await axios.post(`${API_URL}/sniff`, { url: currentMetadata.url }, { timeout: 10000 });
+        const res = await axios.post(`${API_URL}/sniff`, { 
+            url: currentMetadata.url,
+            cookies: currentMetadata.cookies || null,
+            user_agent: currentMetadata.user_agent || null,
+            referer: currentMetadata.referer || null
+        }, { timeout: 10000 });
         const info = res.data;
         if (info && info.title && info.title !== 'Unknown File') {
             currentMetadata.filename = info.title;

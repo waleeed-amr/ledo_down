@@ -593,6 +593,13 @@ a {
   height: 16px;
 }
 
+.login-error {
+  color: var(--danger);
+  font-size: 13px;
+  text-align: center;
+  min-height: 18px;
+  font-weight: 500;
+}
 
 /* ============== DASHBOARD LAYOUT ============== */
 .dashboard-view {
@@ -2445,6 +2452,32 @@ a {
   pointer-events: none;
 }
 
+.avatar-upload-btn {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: var(--gradient);
+  color: white;
+  border: 3px solid var(--bg-1);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: transform 0.2s var(--ease-snap);
+}
+
+.avatar-upload-btn:hover {
+  transform: scale(1.1);
+}
+
+.avatar-upload-btn i {
+  width: 14px;
+  height: 14px;
+}
+
 .account-hero-info {
   min-width: 0;
   padding-top: 50px;
@@ -3656,6 +3689,32 @@ a {
   pointer-events: none;
 }
 
+.acct-avatar-wrap .avatar-upload-btn {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  background: var(--gradient);
+  color: white;
+  border: 3px solid var(--bg-1);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: transform 0.2s var(--ease-snap);
+}
+
+.acct-avatar-wrap .avatar-upload-btn:hover {
+  transform: scale(1.1);
+}
+
+.acct-avatar-wrap .avatar-upload-btn i {
+  width: 12px;
+  height: 12px;
+}
+
 .acct-info {
   min-width: 0;
 }
@@ -3696,6 +3755,26 @@ a {
   background: rgba(16, 185, 129, 0.15);
   color: #34d399;
   border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.acct-pill.pro {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(236, 72, 153, 0.2));
+  color: #c4b5fd;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+}
+
+.acct-pill.online {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.acct-pill.online .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 8px #34d399;
 }
 
 .acct-handle {

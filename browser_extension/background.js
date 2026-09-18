@@ -193,7 +193,13 @@ class ExtensionController {
             if (info.menuItemId.startsWith("download_with_ledo")) {
                 const urlToDownload = info.linkUrl || info.srcUrl;
                 if (urlToDownload) {
-                    ApiClient.sendDownloadRequest(urlToDownload, { is_yt_dlp: true, referer: info.pageUrl });
+                    if (info.menuItemId === "download_with_ledo_link") {
+                        ApiClient.sendQuickAddRequest(urlToDownload, { referer: info.pageUrl });
+                    } else if (info.menuItemId === "download_with_ledo_media") {
+                        ApiClient.sendDownloadRequest(urlToDownload, { is_yt_dlp: true, referer: info.pageUrl });
+                    } else {
+                        ApiClient.sendDownloadRequest(urlToDownload, { is_yt_dlp: false, referer: info.pageUrl });
+                    }
                 }
             }
         });

@@ -1,0 +1,603 @@
+Ledo Command Center — Full Functional Audit & Repair Specification
+1. التشخيص الأساسي
+المشكلة الرئيسية ليست في الـUI.
+الموقع مصمم ليظهر كـAdmin Command Center، وفيه بالفعل أقسام:
+- Users
+- Tickets
+- Crash Reports
+- Announcements
+- App Releases
+- Analytics
+- Settings
+لكن أجزاء كبيرة من هذه الأقسام واجهة فقط أو مرتبطة بمصادر بيانات غير صحيحة.
+أخطر مثال هو Users: الموقع لا يجلب مستخدمي Firebase من users أصلًا، وإنما يبني قائمة "المستخدمين" من الـtickets الموجودة في chats. الكود ينشئ Map من state.tickets ويعتبر userId/email هو المستخدم. 
+وبالتالي:
+الموقع حاليًا لا يمتلك User Management حقيقي.
+
+وده يفسر بشكل مباشر لماذا الـAdmin غير قادر فعليًا على إدارة المستخدمين.
+2. 🔴 Users Management — أهم مشكلة
+الوضع الحالي
+renderUsers() يعتمد على:
+state.tickets
+وليس:
+users
+والـuser card يحتوي فقط:
+- email
+- عدد الـtickets
+- آخر نشاط
+ثم عند الضغط على المستخدم يتم نقلك إلى:
+tickets
+ولا توجد صفحة User Details أو أي Action حقيقي للمستخدم. 
+النتيجة
+حتى لو عندك 100 مستخدم مسجلين في Firebase ولكن ولا واحد فتح Ticket:
+الموقع لن يعتبرهم Users.
+وده Bug معماري، مش مجرد Bug صغير.
+الإصلاح المطلوب
+إلغاء اعتماد Users على Tickets.
+عمل مصدر بيانات مستقل:
+users/{uid}
+والـAdmin يعمل:
+users
+ ↓
+load users
+ ↓
+render users
+ ↓
+user details
+كل User لازم يكون له:
+UID
+Username
+Email
+Photo
+Created At
+Last Seen
+App Version
+Status
+Device ID
+Tickets Count
+Crash Count
+3. 🔴 User Management غير موجود فعليًا
+الواجهة الحالية تعرض user card فقط، بدون:
+- View profile
+- Disable
+- Enable
+- Delete
+- Ban
+- Unban
+- Reset account state
+- View devices
+- View crashes
+- View tickets
+- View activity
+- Force update
+- Send notification
+المطلوب
+عند الضغط على User:
+User Details
+├── Profile
+├── Account Status
+├── Devices
+├── Tickets
+├── Crash Reports
+├── Activity
+└── Admin Actions
+والـAdmin Actions:
+Disable User
+Enable User
+Delete User
+Send Notification
+Force Update
+View Activity
+مهم: تعطيل المستخدم يجب ألا يعتمد على حذف حساب Firebase Auth من الـfrontend. يحتاج backend/Admin SDK أو Cloud Function موثوقة.
+4. 🔴 Firestore Rules تمنع جزءًا من الـAdmin Architecture
+القواعد الحالية تعرف الـAdmin هكذا:
+request.auth.token.admin == true
+OR
+request.auth.token.email == 'waleed@ledodown.local'
+وفي نفس الوقت المستخدم العادي يستطيع الكتابة في وثيقته الخاصة:
+allow read, write: if isOwner(userId);
+بينما الـAdmin يستطيع القراءة فقط في users. 
+المشكلة هنا:
+الموقع يريد أن يكون Control Center، لكن الـrules لا توفر نموذج إدارة مستخدمين كامل.
+المطلوب
+تصميم صلاحيات صريحة:
+Admin
+ ├── read users
+ ├── update user status
+ ├── read activity
+ ├── read crashes
+ ├── create announcements
+ ├── update announcements
+ ├── delete announcements
+ ├── publish releases
+ └── manage configuration
+ولا يتم فتح:
+allow write: if true
+للمستخدمين.
+5. 🔴 Announcements — المشكلة ليست في الإنشاء فقط
+الموقع يستطيع حاليًا إنشاء Announcement:
+announcements/{id}
+ويكتب:
+title
+body
+type
+priority
+active
+action_url
+action_label
+min_version
+created_at
+author
+والتطبيق يستقبل فقط:
+active == true
+ويرتب حسب:
+created_at desc
+المشكلة
+الموقع عنده Delete فقط.
+لا يوجد فعليًا:
+- Edit
+- Activate/Deactivate
+- Schedule
+- Target audience
+- Target version enforcement
+- Read statistics
+- Delivery status
+والـmin_version يتم تخزينه لكن التطبيق المعروض هنا لا يستخدمه في query أو filtering.
+يعني:
+الموقع يقول Target Version، لكن هذا لا يعني أن التطبيق سيحترمه.
+
+6. 🔴 Announcements تحتاج نظام Publish حقيقي
+بدل مجرد:
+active = true
+اعمل schema واضح:
+{
+  "title": "...",
+  "body": "...",
+  "type": "info",
+  "priority": "high",
+  "status": "published",
+  "target": {
+    "minVersion": "3.9.0",
+    "maxVersion": "",
+    "channel": "stable"
+  },
+  "action": {
+    "url": "...",
+    "label": "..."
+  },
+  "createdAt": "...",
+  "publishedAt": "...",
+  "authorUid": "..."
+}
+ويكون عندك:
+Draft
+Published
+Disabled
+Expired
+7. 🔴 التطبيق نفسه يخفي فشل الإشعارات
+في announcements.js، لو Firestore query فشل، يحصل:
+console.debug(...)
+وخلاص.
+يعني المستخدم لا يرى شيئًا، والـAdmin لا يعرف أن الإشعار فشل.
+announcements.jsJSوالأسوأ أن الـquery نفسه:
+where(active == true)
+orderBy(created_at)
+قد يحتاج Firestore index مناسب.
+المطلوب
+عند فشل استقبال Announcement:
+log:
+Announcement fetch failed
+reason:
+permission-denied / failed-precondition / unavailable / network
+ويتم إرسال telemetry.
+8. 🔴 Update System — من أهم المشاكل
+الموقع يكتب:
+app_config/latest_update
+بالبيانات:
+version
+download_url
+changelog
+required
+channel
+sha256
+released_at
+updatedBy
+app.jsJS 
+والتطبيق يقرأ نفس الوثيقة، ودي نقطة جيدة جدًا.
+لكن المشكلة أن نظام التحديث الحالي ليس Update Management System كاملًا.
+9. 🔴 Version comparison يجب توحيده
+في التطبيق يوجد:
+_parse_version()
+ومقارنة version حقيقية. telemetry_worker.pyPY
+بينما الـAdmin نفسه لا يمنع نشر version أقدم من الحالية.
+مثال:
+Current = 4.0.0
+
+Admin publishes = 3.9.5
+الموقع قد يقبلها.
+المطلوب
+Admin يجب أن يتحقق:
+newVersion > currentPublishedVersion
+إلا إذا كان هناك override إداري صريح.
+10. 🔴 Required Update يحتاج تصميم أفضل
+حاليًا:
+required: true
+يجعل التطبيق يخفي Later وClose. announcements.jsJS
+لكن هذا ليس Force Update حقيقيًا.
+المستخدم يستطيع غالبًا إغلاق البرنامج/تجاوز النظام بطرق أخرى.
+المطلوب
+وجود:
+required
+minimum_supported_version
+مثلاً:
+latest_version = 4.1.0
+minimum_supported_version = 4.0.0
+وبالتالي:
+3.9.0 → blocked
+4.0.0 → allowed
+4.1.0 → latest
+وده أفضل بكثير من required=true فقط.
+11. 🔴 Admin لا يمتلك Release History
+حاليًا latest_update عبارة عن document واحد.
+يعني كل Publish جديد يستبدل الإصدار السابق.
+المطلوب
+إضافة:
+app_releases/{releaseId}
+مثال:
+4.0.0
+4.0.1
+4.1.0
+4.2.0
+ثم:
+app_config/latest_update
+يكون فقط pointer إلى أحدث Release.
+وبالتالي تستطيع كـAdmin:
+- رؤية الإصدارات السابقة
+- معرفة من نشرها
+- تاريخ النشر
+- الرابط
+- SHA256
+- changelog
+- required
+- channel
+- rollback
+12. 🔴 لا يوجد Rollback حقيقي
+لو نشرت Update غلط:
+4.2.0
+لا يوجد نظام واضح:
+Rollback → 4.1.0
+المطلوب زر:
+Rollback Release
+يغير latest_update إلى Release موثوق سابق.
+13. 🔴 Public Links جيدة لكن تحتاج توحيد
+الموقع يكتب:
+app_config/public_links
+والتطبيق يقرأ نفس المكان. دي نقطة جيدة.
+لكن الـAdmin يحتاج:
+- Validate
+- Preview
+- Last updated
+- Updated by
+- Test Link
+حاليًا الحفظ يعتمد على HTTPS validation فقط. 
+14. 🔴 Tickets فيها Bug معماري محتمل جدًا
+الموقع يقرأ:
+chats
+ثم عند الرد يستخدم:
+chats/{userId}/messages
+وفي نفس الوقت الـticket نفسه هو:
+chats/{ticket.id}
+لاحظ الفرق:
+ticket.id
+مقابل:
+userId
+وفي sendReply() يتم إرسال الرسالة إلى:
+chats/${userId}/messages
+ثم تحديث:
+chats/${state.selectedTicket.id}
+لو ticket.id !== userId — وهو احتمال كبير في تصميم Ticket system — فأنت تتعامل مع وثيقتين مختلفتين.
+لازم الوكيل يراجع الـdata model ويثبت العلاقة بشكل واحد.
+15. 🔴 رسالة الـAdmin قد تصل ولكن نسخة Inbox تفشل
+الموقع يعمل:
+chats/{userId}/messages
+ثم يحاول أيضًا:
+users/{userId}/messages
+ولو الثانية فشلت يتم تجاهلها:
+console.debug("Inbox copy was not delivered")
+ده يجعل النظام يقول:
+Reply sent
+
+رغم أن جزءًا من نظام notification/inbox قد يكون فشل.
+المطلوب
+اعتبار العملية لها حالة:
+Message sent
+Inbox synced
+Notification delivered
+كل واحدة مستقلة.
+16. 🔴 Notifications في الـAdmin ليست Notifications حقيقية
+renderNotifications() ببساطة يأخذ:
+state.tickets.slice(0, 8)
+ويعرضهم كـnotifications. 
+يعني:
+Notifications = آخر 8 Tickets
+
+وليس Notification system.
+المطلوب
+Collection مستقلة:
+admin_notifications
+مثلاً:
+new_user
+new_ticket
+new_crash
+announcement_published
+update_published
+system_error
+مع:
+read
+createdAt
+type
+referenceId
+17. 🔴 Crash Reports — موجودة لكن ناقصة تشغيليًا
+الموقع عنده listener:
+crash_reports
+orderBy(createdAt)
+limit(200)
+app.jsJSوده جيد.
+لكن المطلوب إضافة:
+Version
+OS
+Device ID
+Timestamp
+Error count
+Stack trace
+First seen
+Last seen
+Occurrences
+وعمل grouping:
+TypeError X
+ ├─ 17 occurrences
+ ├─ 8 devices
+ └─ versions 3.8 / 3.9
+بدل عرض crashes منفردة فقط.
+18. 🔴 Analytics ليست Analytics فعلية بالكامل
+الموقع يحسب:
+resolution rate
+unique users
+tickets today
+لكن response time:
+—
+ومذكور صراحة أنه placeholder. 
+والـUsers analytics أيضًا مبنية على Tickets.
+المطلوب
+Analytics حقيقية من البيانات:
+Total users
+Active users
+New users
+DAU
+WAU
+MAU
+App versions
+Update adoption
+Crash-free devices
+Tickets
+Response time
+Resolution time
+Announcements
+19. 🔴 My Activity ليست Activity Log
+الموقع نفسه يقول:
+In a real implementation...
+For now, derive from current state
+ثم يستنتج النشاط من الـtickets. 
+ده ليس Audit Log.
+المطلوب
+كل Admin action يتسجل:
+admin_activity/{id}
+مثلاً:
+ADMIN
+published update 4.1.0
+2026-09-14
+أو:
+ADMIN
+deleted announcement ABC
+20. 🔴 Admin Authentication يحتاج Role واضح
+تسجيل الدخول حاليًا Firebase Email/Password. 
+لكن مجرد نجاح login لا يعني بالضرورة أن الحساب Admin؛ الـFirestore Rules هي التي تقرر ذلك.
+المطلوب بعد login:
+Firebase Auth
+ ↓
+verify admin role
+ ↓
+load dashboard
+ولو المستخدم Authenticated لكنه ليس Admin:
+Access denied
+ولا يتم تحميل الـDashboard أصلًا.
+21. 🔴 لا تجعل Email ثابتًا هو الحل النهائي للـAdmin
+الـrules الحالية تعتمد أيضًا على:
+waleed@ledodown.local
+ده مناسب كحل مؤقت، لكنه ليس نظام Roles.
+المطلوب:
+custom claim:
+admin = true
+أو:
+role = admin
+مع إدارة موثوقة للـclaims.
+22. 🔴 Error Handling ضعيف في الموقع
+في أماكن كثيرة يوجد:
+console.error()
+لكن لا يوجد نظام موحد.
+مثلاً Announcement loading يفشل ويكتفي بالـconsole. 
+وكذلك public links.
+المطلوب
+كل عملية تكون:
+Loading
+Success
+Empty
+Permission denied
+Network error
+Retry
+مع UI واضح.
+23. 🔴 مشكلة خطيرة في Frontend Error Reporting
+announcements.js يرسل:
+POST http://127.0.0.1:8000/api/report-error
+ده عنوان جهاز المستخدم نفسه.
+لو التطبيق Desktop فهذا قد يكون مقصودًا لو Backend محلي شغال.
+لكن لو الـbackend غير شغال:
+127.0.0.1:8000
+لن يصل أي شيء.
+والـerror يتم ابتلاعه:
+.catch(() => {})
+وبالتالي أنت كـAdmin لن تعرف أصلًا أن reporting فشل.
+24. 🔴 الموقع والـapp يستخدمان مسارين مختلفين للبيانات
+الـAdmin يستخدم Firebase مباشرة:
+Admin → Firestore
+بينما التطبيق عنده:
+App → Local Backend
+ثم telemetry يستخدم:
+App → Firestore REST
+وده سبب مهم جدًا لضعف الربط.
+المطلوب توحيد الـcontract.
+25. التصميم النهائي المطلوب
+Admin
+                ┌──────────────────────┐
+                │   Ledo Admin Panel   │
+                └──────────┬───────────┘
+                           │
+                    Firebase Auth
+                           │
+                    Admin Role
+                           │
+                ┌──────────▼───────────┐
+                │   Admin Data Layer   │
+                └──────────┬───────────┘
+                           │
+                     Firestore
+                           │
+       ┌─────────┬─────────┼──────────┬──────────┐
+       ▼         ▼         ▼          ▼          ▼
+     Users    Tickets   Crashes   Announcements Releases
+26. Firestore Structure المقترح
+users/{uid}
+
+user_devices/{deviceId}
+
+chats/{chatId}
+chats/{chatId}/messages/{messageId}
+
+crash_reports/{reportId}
+
+announcements/{announcementId}
+
+app_releases/{releaseId}
+
+app_config/latest_update
+
+app_config/public_links
+
+admin_activity/{activityId}
+
+admin_notifications/{notificationId}
+
+telemetry/{deviceId}
+
+update_events/{eventId}
+27. أهم Feature: Control Center حقيقي
+بعد الإصلاح، الموقع لازم يسمح لك من مكان واحد:
+Users
+View
+Search
+Filter
+Sort
+Disable
+Enable
+Delete
+View activity
+View crashes
+View tickets
+Send notification
+Announcements
+Create
+Edit
+Delete
+Publish
+Unpublish
+Schedule
+Target version
+Target channel
+Priority
+Action URL
+Preview
+Releases
+Create Release
+Version
+Download URL
+SHA256
+Changelog
+Stable/Beta
+Required
+Minimum supported version
+Publish
+Unpublish
+Rollback
+History
+Crashes
+View
+Group
+Filter
+Search
+Version filter
+Device filter
+Occurrences
+Mark resolved
+Analytics
+Users
+Active users
+Versions
+Update adoption
+Crashes
+Tickets
+Announcements
+28. لازم يكون فيه Health Monitor
+في أعلى الموقع:
+Firebase       ● Connected
+Auth           ● Connected
+Firestore      ● Connected
+Announcements  ● Healthy
+Updates        ● Healthy
+Telemetry      ● Healthy
+Users          ● Healthy
+ولو فيه مشكلة:
+Firestore
+❌ Permission denied
+
+Announcements
+❌ Query failed
+
+Update System
+⚠ No active release
+مش مجرد كلمة:
+Live
+لأن الـUI حاليًا يعرض Live status في الـheader، لكن لازم تكون حالة فعلية وليست مجرد indicator بصري. الـHTML نفسه يضع Live كـstatus pill. index.htmlHTML
+29. الأولويات
+🔥 P0 — لازم تتصلح أولًا
+1. User Management الحقيقي
+2. Firestore Admin permissions
+3. Announcements end-to-end
+4. Update publishing end-to-end
+5. Admin ↔ Firestore ↔ App contract
+6. Authentication + Admin role
+7. Error reporting
+8. Ticket/User ID data model
+🟠 P1
+9. Release history
+10. Rollback
+11. Announcement edit/disable
+12. Admin notifications
+13. Activity log
+14. Crash grouping
+15. Real analytics
+🟡 P2
+16. Scheduling
+17. Targeting
+18. Update adoption analytics
+19. UI improvements
+20. Performance optimization

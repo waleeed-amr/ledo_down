@@ -39,6 +39,13 @@ class DownloadRecord(Base):
     is_yt_dlp = Column(Boolean, default=False)
     error_message = Column(String, default="")
     created_at = Column(Float, default=lambda: time.time() * 1000)
+    
+    # Newly added fields for robust pause/resume
+    save_path = Column(String, nullable=True)
+    quality = Column(String, default="best")
+    cookies = Column(String, nullable=True)
+    user_agent = Column(String, nullable=True)
+    referer = Column(String, nullable=True)
 
 Base.metadata.create_all(bind=engine)
 
@@ -53,7 +60,20 @@ def auto_migrate():
             if "created_at" not in columns:
                 cursor.execute("ALTER TABLE downloads ADD COLUMN created_at FLOAT")
                 cursor.execute(f"UPDATE downloads SET created_at = {now_ms} WHERE created_at IS NULL")
-                conn.connection.commit()
+                
+            # Add new columns if missing
+            new_cols = {
+                "save_path": "STRING",
+                "quality": "STRING DEFAULT 'best'",
+                "cookies": "STRING",
+                "user_agent": "STRING",
+                "referer": "STRING"
+            }
+            for col, type_def in new_cols.items():
+                if col not in columns:
+                    cursor.execute(f"ALTER TABLE downloads ADD COLUMN {col} {type_def}")
+                    
+            conn.connection.commit()
             cursor.close()
     except Exception as e:
         pass

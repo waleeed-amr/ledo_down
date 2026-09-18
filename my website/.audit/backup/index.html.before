@@ -77,6 +77,8 @@
           <span>Sign in</span>
           <i data-lucide="arrow-right"></i>
         </button>
+
+        <div id="login-error" class="login-error"></div>
       </form>
     </div>
     <div class="login-bg-text">LEDO</div>
@@ -340,7 +342,7 @@
 
           <div class="card no-pad">
             <div class="table-wrap">
-              <table class="data-table">
+              <table class="data-table" id="tickets-table">
                 <thead>
                   <tr>
                     <th>Status</th>
@@ -669,18 +671,24 @@
       <div class="acct-body">
         <div class="acct-avatar-wrap">
           <div class="acct-avatar" id="account-avatar">A</div>
+          <button class="avatar-upload-btn" id="avatar-upload-btn" title="Change avatar" type="button">
+            <i data-lucide="camera"></i>
+          </button>
         </div>
         <div class="acct-info">
           <div class="acct-name-row">
             <h2 id="account-display-name">Admin</h2>
-            <span class="acct-pill verified">
+            <span class="acct-pill verified" id="account-verified">
               <i data-lucide="badge-check"></i> Verified
             </span>
+            <span class="acct-pill pro"><i data-lucide="crown"></i> Pro</span>
+            <span class="acct-pill online"><span class="dot"></span> Online</span>
           </div>
           <div class="acct-handle" id="account-email-display">—</div>
           <div class="acct-meta">
             <span class="acct-meta-item"><i data-lucide="shield"></i> Super Admin</span>
             <span class="acct-meta-item"><i data-lucide="calendar"></i> Joined <span id="account-joined">—</span></span>
+            <span class="acct-meta-item"><i data-lucide="globe"></i> <span id="account-location">Earth</span></span>
           </div>
         </div>
         <div class="acct-stats">
@@ -768,6 +776,9 @@
                       <div class="acct-input readonly">
                         <i data-lucide="mail"></i>
                         <input type="email" id="profile-email" readonly />
+                        <span class="verified-pill" id="email-verified-pill">
+                          <i data-lucide="check"></i> Verified
+                        </span>
                       </div>
                     </div>
                     <div class="acct-field full">
@@ -1055,7 +1066,18 @@
             </button>
           </div>
           <div class="sessions-list" id="sessions-list">
-            <div class="muted" style="padding: 12px 4px;">No active sessions to display.</div>
+            <div class="session-item current">
+              <div class="session-icon"><i data-lucide="monitor"></i></div>
+              <div class="session-info">
+                <div class="session-name">This device</div>
+                <div class="session-meta">
+                  <span><i data-lucide="globe"></i> <span id="sess-browser">—</span></span>
+                  <span><i data-lucide="map-pin"></i> <span id="sess-location">—</span></span>
+                  <span class="session-current">● Active now</span>
+                </div>
+              </div>
+              <span class="session-pill">Current</span>
+            </div>
           </div>
         </div>
 
@@ -1071,7 +1093,20 @@
             </button>
           </div>
           <div class="tokens-list" id="tokens-list">
-            <div class="muted" style="padding: 12px 4px;">No API tokens have been generated yet.</div>
+            <div class="token-item">
+              <div class="token-icon"><i data-lucide="key"></i></div>
+              <div class="token-info">
+                <div class="token-name">Dashboard CLI</div>
+                <div class="token-meta">
+                  <span class="token-mono">ledo_pat_************************a8f2</span>
+                  <span>Created 12 days ago</span>
+                  <span>Last used 2h ago</span>
+                </div>
+              </div>
+              <button class="row-btn" title="Revoke">
+                <i data-lucide="trash-2"></i>
+              </button>
+            </div>
           </div>
         </div>
       </div>

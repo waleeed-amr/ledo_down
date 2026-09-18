@@ -11,6 +11,7 @@ let isVisible = false;
 let isCollapsed = false;
 let isHovered = false;
 let manuallyClosed = false;
+let closedDownloadIds = new Set();
 let latestDownloads = [];
 
 // DOM Elements
@@ -91,11 +92,23 @@ function connectWebSocket() {
 
 function handleDownloadsUpdate(allDownloads) {
     latestDownloads = allDownloads;
-    if (manuallyClosed) return;
 
-    // Filter active and recently completed downloads
-    const active = allDownloads.filter(dl => ['downloading', 'starting', 'processing'].includes(dl.status));
+    // Filter active, paused, errored and recently completed downloads
+    const active = allDownloads.filter(dl => ['downloading', 'starting', 'processing', 'paused', 'error'].includes(dl.status));
     const completed = allDownloads.filter(dl => dl.status === 'completed');
+
+    if (active.length === 0) {
+        manuallyClosed = false;
+        closedDownloadIds.clear();
+    } else if (manuallyClosed) {
+        const hasNewDownload = active.some(dl => !closedDownloadIds.has(dl.id));
+        if (hasNewDownload) {
+            manuallyClosed = false;
+            closedDownloadIds.clear();
+        } else {
+            return;
+        }
+    }
 
     if (active.length > 0) {
         clearTimeout(hideTimeout);
@@ -141,7 +154,14 @@ function handleDownloadsUpdate(allDownloads) {
 function renderDownloads(downloads) {
     let totalSpeed = 0;
     let totalProgressSum = 0;
-    let html = '';
+    
+    // Remove stale items
+    const currentIds = downloads.map(dl => `mini-dl-${dl.id}`);
+    Array.from(downloadsContainer.children).forEach(child => {
+        if (!currentIds.includes(child.id)) {
+            child.remove();
+        }
+    });
 
     downloads.forEach(dl => {
         const speed = dl.speed || 0;
@@ -156,21 +176,34 @@ function renderDownloads(downloads) {
         const downStr = formatSize(dl.downloaded);
         const etaStr = calculateETA(dl.downloaded, dl.total_size, speed);
         const isPaused = dl.status === 'paused';
-
-        html += `
-            <div class="dl-item" id="mini-dl-${dl.id}">
+        const isError = dl.status === 'error';
+        
+        let item = document.getElementById(`mini-dl-${dl.id}`);
+        
+        if (!item) {
+            item = document.createElement('div');
+            item.className = 'dl-item';
+            item.id = `mini-dl-${dl.id}`;
+            item.dataset.status = dl.status;
+            item.innerHTML = `
                 <div class="dl-top">
                     <div class="dl-left">
                         <span class="dl-type-badge">${ext}</span>
-                        <span class="dl-name" title="${name}">${name}</span>
+                        <span class="dl-name" title="${name.replace(/"/g, '&quot;')}">${name}</span>
                     </div>
                     <div class="dl-actions-row">
+                        ${isError ? `
+                        <button type="button" class="dl-btn" onclick="retryDl('${dl.id}')" title="Retry" style="color: #ef4444;">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                        </button>
+                        ` : `
                         <button type="button" class="dl-btn" onclick="togglePause('${dl.id}', ${isPaused})" title="${isPaused ? 'Resume' : 'Pause'}">
                             ${isPaused 
                                 ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`
                                 : `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`
                             }
                         </button>
+                        `}
                         <button type="button" class="dl-btn cancel-btn" onclick="cancelDl('${dl.id}')" title="Cancel">
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                         </button>
@@ -189,11 +222,55 @@ function renderDownloads(downloads) {
                         <span class="dl-percent-val" style="margin-left: 6px;">${prog.toFixed(1)}%</span>
                     </div>
                 </div>
-            </div>
-        `;
+            `;
+            downloadsContainer.appendChild(item);
+        } else {
+            // In-place update
+            const nameEl = item.querySelector('.dl-name');
+            if (nameEl && nameEl.textContent !== name) {
+                nameEl.textContent = name;
+                nameEl.title = name;
+            }
+            
+            const fill = item.querySelector('.progress-fill');
+            if (fill) fill.style.width = `${prog}%`;
+            
+            const stats = item.querySelector('.dl-stats');
+            if (stats) {
+                stats.innerHTML = `<span>${downStr} / ${sizeStr}</span>${etaStr !== '--' ? `<span>• ${etaStr}</span>` : ''}`;
+            }
+            
+            const speedEl = item.querySelector('.dl-speed-val');
+            if (speedEl) speedEl.textContent = speedStr;
+            
+            const pctEl = item.querySelector('.dl-percent-val');
+            if (pctEl) pctEl.textContent = `${prog.toFixed(1)}%`;
+            
+            if (item.dataset.status !== dl.status) {
+                item.dataset.status = dl.status;
+                const actionsRow = item.querySelector('.dl-actions-row');
+                if (actionsRow) {
+                    actionsRow.innerHTML = `
+                        ${isError ? `
+                        <button type="button" class="dl-btn" onclick="retryDl('${dl.id}')" title="Retry" style="color: #ef4444;">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
+                        </button>
+                        ` : `
+                        <button type="button" class="dl-btn" onclick="togglePause('${dl.id}', ${isPaused})" title="${isPaused ? 'Resume' : 'Pause'}">
+                            ${isPaused 
+                                ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`
+                                : `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`
+                            }
+                        </button>
+                        `}
+                        <button type="button" class="dl-btn cancel-btn" onclick="cancelDl('${dl.id}')" title="Cancel">
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                        </button>
+                    `;
+                }
+            }
+        }
     });
-
-    downloadsContainer.innerHTML = html;
 
     // Header info
     headerTitle.innerText = downloads.length === 1 ? '1 Download' : `${downloads.length} Downloads`;
@@ -226,6 +303,12 @@ window.togglePause = async function(downloadId, isPaused) {
         } else {
             await fetch(`${API_URL}/pause/${downloadId}`, { method: 'POST' }).catch(() => {});
         }
+    } catch(e) {}
+};
+
+window.retryDl = async function(downloadId) {
+    try {
+        await fetch(`${API_URL}/retry/${downloadId}`, { method: 'POST' }).catch(() => {});
     } catch(e) {}
 };
 
@@ -265,7 +348,9 @@ btnClose.addEventListener('click', () => {
     ipcRenderer.send('mini-progress-action', 'hide');
     isVisible = false;
     manuallyClosed = true;
-    setTimeout(() => { manuallyClosed = false; }, 8000);
+    closedDownloadIds.clear();
+    const active = latestDownloads.filter(dl => ['downloading', 'starting', 'processing', 'paused', 'error'].includes(dl.status));
+    active.forEach(dl => closedDownloadIds.add(dl.id));
 });
 
 btnOpenDefaultFolder.addEventListener('click', async () => {

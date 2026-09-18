@@ -12,7 +12,7 @@ import time
 
 # FIX for [Errno 22] Invalid argument in PyInstaller --noconsole mode
 # When running without a console, standard streams are None. This causes
-# yt-dlp and subprocesses to crash with Errno 22 when they try to inherit handles.
+# yt-dlp and subprocesses to crash wi th Errno 22 when they try to inherit handles.
 if sys.stdout is None:
     sys.stdout = open(os.devnull, "w")
 if sys.stderr is None:
@@ -20,12 +20,20 @@ if sys.stderr is None:
 if sys.stdin is None:
     sys.stdin = open(os.devnull, "r")
 
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 import orjson
 from loguru import logger
 from sqlalchemy.orm import Session
 
 from database import get_db, DownloadRecord, SessionLocal
-from downloader import start_download, active_downloads, get_category_dir, BASE_DOWNLOAD_DIR
+from downloader import (
+    start_download, active_downloads, get_category_dir, BASE_DOWNLOAD_DIR,
+    set_speed_limit, get_speed_limit, set_max_concurrent, get_max_concurrent,
+    set_auto_categorize, set_base_download_dir
+)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi.responses import FileResponse
 from datetime import datetime
@@ -87,6 +95,7 @@ class DownloadRequest(BaseModel):
     is_yt_dlp: Optional[bool] = None
     save_path: Optional[str] = None
     quality: Optional[str] = "best"
+    title: Optional[str] = None
     cookies: Optional[str] = None
     user_agent: Optional[str] = None
     referer: Optional[str] = None
@@ -103,7 +112,32 @@ class QuickAddRequest(BaseModel):
     file_size: Optional[int] = None
     mime_type: Optional[str] = None
 
+class SettingsUpdateRequest(BaseModel):
+    speed_limit_kbps: Optional[int] = None
+    max_concurrent: Optional[int] = None
+    auto_categorize: Optional[bool] = None
+    download_path: Optional[str] = None
+
 async def resolve_short_url(url: str) -> str:
+    if "open.spotify.com/track/" in url or "spotify.link/" in url:
+        try:
+            if "spotify.link/" in url:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.head(url, follow_redirects=True)
+                    url = str(resp.url)
+            
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url, follow_redirects=True)
+                import re
+                match = re.search(r'<title>(.*?)</title>', resp.text)
+                if match:
+                    title = match.group(1)
+                    clean_title = title.replace('| Spotify', '').replace('- song and lyrics by', '').replace('- song by', '').strip()
+                    logger.info(f"Resolved Spotify URL to search query: {clean_title}")
+                    return f"ytsearch1:{clean_title} audio"
+        except Exception as e:
+            logger.warning(f"Failed to resolve spotify URL: {e}")
+
     if any(short in url for short in ["vt.tiktok.com", "vm.tiktok.com", "instagram.com/reel", "t.co/", "fb.watch"]):
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -124,7 +158,7 @@ async def check_is_direct_file(url: str, cookies: str = None, user_agent: str = 
             headers['Referer'] = referer
         if cookies:
             headers['Cookie'] = cookies
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
             resp = await client.head(url, headers=headers)
             if resp.status_code not in (200, 206):
                 resp = await client.get(url, headers={"Range": "bytes=0-0", **headers})
@@ -135,15 +169,12 @@ async def check_is_direct_file(url: str, cookies: str = None, user_agent: str = 
                 
                 # Check for direct file signatures
                 is_direct = False
-                if any(t in content_type for t in [
-                    'application/octet-stream', 'application/zip',
-                    'application/x-msdownload', 'application/x-rar',
-                    'application/pdf', 'application/x-7z',
-                    'application/x-tar', 'application/gzip',
-                    'application/vnd.android.package-archive'
-                ]):
+                
+                # If it's an explicit attachment
+                if 'attachment' in content_dispo.lower():
                     is_direct = True
-                elif 'attachment' in content_dispo.lower():
+                # If it's not HTML and not a typical API response (json), it's probably a file
+                elif content_type and 'text/html' not in content_type and 'application/json' not in content_type:
                     is_direct = True
                 else:
                     import os as _os
@@ -215,6 +246,7 @@ async def trigger_quick_add(req: QuickAddRequest):
 
 @app.post("/api/sniff")
 async def sniff_url(req: InfoRequest):
+    req.url = await resolve_short_url(req.url)
     # Try direct file first
     direct_info = await check_is_direct_file(req.url)
     if direct_info.get("is_direct"):
@@ -300,8 +332,9 @@ async def add_download(req: DownloadRequest, db: Session = Depends(get_db)):
                 pass
 
     try:
-        download_id = start_download(req.url, db, use_ytdlp=is_yt_dlp, on_update=broadcast_update, save_path=req.save_path, quality=req.quality, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer)
+        download_id = start_download(req.url, db, use_ytdlp=is_yt_dlp, on_update=broadcast_update, save_path=req.save_path, quality=req.quality, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer, title=req.title)
         logger.success(f"Download started successfully with ID: {download_id}")
+        asyncio.create_task(broadcast_downloads())
         return {"status": "started", "id": download_id}
     except Exception as e:
         logger.exception(f"Failed to start download: {e}")
@@ -316,10 +349,12 @@ async def pause_download(db: Session = Depends(get_db), download_id: str = ""):
     if download_id in active_downloads:
         dl = active_downloads[download_id]
         dl.stop_event.set()
+        dl.thread_stop_event.set()
         
         db_rec = db.query(DownloadRecord).filter(DownloadRecord.id == download_id).first()
         if db_rec:
             db_rec.status = "paused"
+            db_rec.speed = 0
             db.commit()
             logger.info(f"Download {download_id} paused in DB.")
             
@@ -363,10 +398,10 @@ async def resume_download(db: Session = Depends(get_db), download_id: str = ""):
 
 @app.delete("/api/cancel/")
 @app.delete("/api/cancel/{download_id}")
-async def cancel_download(db: Session = Depends(get_db), download_id: str = ""):
+async def cancel_download(db: Session = Depends(get_db), download_id: str = "", delete_file: bool = False):
     if not download_id:
         return {"status": "error"}
-    logger.info(f"Cancel requested for ID: {download_id}")
+    logger.info(f"Cancel requested for ID: {download_id}, delete_file: {delete_file}")
     if download_id in active_downloads:
         dl = active_downloads[download_id]
         dl.stop_event.set()
@@ -379,29 +414,48 @@ async def cancel_download(db: Session = Depends(get_db), download_id: str = ""):
         db.commit()
         logger.info(f"Download {download_id} canceled and deleted from DB.")
     
+    # Give the downloader thread a moment to receive the stop event and close the file
+    await asyncio.sleep(1.0)
+    
     # Clean up temporary/partial files left on disk
     await concurrency.run_in_threadpool(_cleanup_temp_files, filename)
+    
+    if delete_file and filename:
+        import glob
+        for root, _, files in os.walk(BASE_DOWNLOAD_DIR):
+            if filename in files:
+                try:
+                    os.remove(os.path.join(root, filename))
+                    logger.info(f"Deleted completed file: {filename}")
+                except Exception as e:
+                    logger.error(f"Failed to delete {filename}: {e}")
         
     asyncio.create_task(broadcast_downloads())
     return {"status": "canceled", "download_id": download_id}
 
 
-def _cleanup_temp_files(filename: str = None):
+def _cleanup_temp_files(filename: str = None, clean_all: bool = False):
     """Remove .part, .ytdl, and fragment temp files from the downloads directory."""
     import glob
     cleaned = 0
     try:
         for root, dirs, files in os.walk(BASE_DOWNLOAD_DIR):
             for f in files:
+                # If we're not cleaning ALL files, and we have a specific filename
+                if not clean_all and filename:
+                    basename = filename.split('.part')[0]
+                    if not (f.startswith(filename) or f.startswith(basename)):
+                        continue
+                # If not cleaning all and no filename provided, skip to avoid deleting everything
+                elif not clean_all and not filename:
+                    continue
+                    
                 is_temp = False
                 # Match common temp patterns
                 if f.endswith('.part') or f.endswith('.ytdl') or '.part-Frag' in f:
                     is_temp = True
                 # Match partial chunks from our chunked downloader (e.g. file.ext.part0)
                 elif any(f.endswith(f'.part{i}') for i in range(32)):
-                    is_temp = True
-                # If a filename is known, also clean up incomplete versions
-                elif filename and f.startswith(filename) and f != filename:
                     is_temp = True
                     
                 if is_temp:
@@ -425,6 +479,7 @@ def sync_extract_info(url: str, ydl_opts: dict):
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
     logger.info(f"Fetching info for URL: {req.url}")
+    req.url = await resolve_short_url(req.url)
     
     try:
         # Check if direct file first
@@ -451,6 +506,8 @@ async def get_info(req: InfoRequest):
             'ignoreerrors': True,
             'force_ipv4': True,
             'skip_download': True,
+            'socket_timeout': 15,
+            'flat_playlist': True,
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -561,13 +618,40 @@ async def get_info(req: InfoRequest):
         logger.exception(f"Failed to fetch info: {e}")
         return {"status": "error", "message": str(e)}
 
+_last_net_io = None
+_last_disk_io = None
+_last_time = None
+
 async def get_system_stats():
     """Retrieve system stats using psutil"""
+    global _last_net_io, _last_disk_io, _last_time
+    import time
+    
     cpu_percent = psutil.cpu_percent(interval=None)
     mem = psutil.virtual_memory()
+    
+    current_time = time.time()
+    current_net = psutil.net_io_counters()
+    current_disk = psutil.disk_io_counters()
+    
+    net_speed = 0
+    disk_speed = 0
+    
+    if _last_time is not None:
+        dt = current_time - _last_time
+        if dt > 0:
+            net_speed = (current_net.bytes_recv + current_net.bytes_sent - _last_net_io.bytes_recv - _last_net_io.bytes_sent) / dt
+            disk_speed = (current_disk.read_bytes + current_disk.write_bytes - _last_disk_io.read_bytes - _last_disk_io.write_bytes) / dt
+            
+    _last_time = current_time
+    _last_net_io = current_net
+    _last_disk_io = current_disk
+
     return {
         "cpu": cpu_percent,
-        "memory": mem.percent
+        "memory": mem.percent,
+        "net_speed": net_speed,
+        "disk_speed": disk_speed
     }
 
 async def broadcast_system_stats():
@@ -586,18 +670,8 @@ async def broadcast_downloads():
         try:
             records = db.query(DownloadRecord).all()
             downloads = []
-            from downloader import get_category_dir
-            import os
+            now_ms = time.time() * 1000
             for rec in records:
-                created_at = getattr(rec, 'created_at', None)
-                if not created_at and rec.filename:
-                    cat_dir = get_category_dir(rec.filename)
-                    fp = os.path.join(cat_dir, rec.filename)
-                    if os.path.exists(fp):
-                        created_at = os.path.getctime(fp) * 1000
-                if not created_at:
-                    created_at = time.time() * 1000
-                        
                 downloads.append({
                     "id": rec.id,
                     "url": rec.url,
@@ -608,7 +682,7 @@ async def broadcast_downloads():
                     "downloaded": rec.downloaded,
                     "filename": rec.filename,
                     "error_message": rec.error_message,
-                    "created_at": created_at
+                    "created_at": getattr(rec, 'created_at', None) or now_ms
                 })
             
             payload = {
@@ -619,22 +693,44 @@ async def broadcast_downloads():
         except Exception as e:
             logger.error(f"Error broadcasting downloads: {e}")
 
+@app.get("/api/downloads")
+async def get_all_downloads(db: Session = Depends(get_db)):
+    records = db.query(DownloadRecord).all()
+    downloads = []
+    now_ms = time.time() * 1000
+    for rec in records:
+        downloads.append({
+            "id": rec.id,
+            "url": rec.url,
+            "status": rec.status,
+            "progress": rec.progress,
+            "speed": rec.speed,
+            "total_size": rec.total_size,
+            "downloaded": rec.downloaded,
+            "filename": rec.filename,
+            "error_message": rec.error_message,
+            "created_at": getattr(rec, 'created_at', None) or now_ms
+        })
+    return downloads
+
 class ScheduleRequest(BaseModel):
     url: str
     is_yt_dlp: Optional[bool] = None
     save_path: Optional[str] = None
     quality: Optional[str] = "best"
     run_at: str
+    title: Optional[str] = None
 
 @app.post("/api/schedule")
 async def schedule_download(req: ScheduleRequest, db: Session = Depends(get_db)):
     logger.info(f"Scheduling download for {req.url} at {req.run_at}")
+    req.url = await resolve_short_url(req.url)
     run_date = datetime.fromisoformat(req.run_at.replace('Z', '+00:00'))
     
-    def job_func(url, is_yt_dlp, save_path, quality):
+    def job_func(url, is_yt_dlp, save_path, quality, title):
         db_session = SessionLocal()
         try:
-            download_id = start_download(url, db_session, use_ytdlp=is_yt_dlp, save_path=save_path, quality=quality)
+            download_id = start_download(url, db_session, use_ytdlp=is_yt_dlp, save_path=save_path, quality=quality, title=title)
             logger.info(f"Scheduled download started: {download_id}")
             if app_loop and not app_loop.is_closed():
                 asyncio.run_coroutine_threadsafe(broadcast_downloads(), app_loop)
@@ -645,7 +741,7 @@ async def schedule_download(req: ScheduleRequest, db: Session = Depends(get_db))
         job_func, 
         'date', 
         run_date=run_date, 
-        args=[req.url, req.is_yt_dlp, req.save_path, req.quality]
+        args=[req.url, req.is_yt_dlp, req.save_path, req.quality, req.title]
     )
     return {"status": "scheduled", "time": str(run_date)}
 
@@ -672,7 +768,7 @@ async def get_stats(db: Session = Depends(get_db)):
 async def cleanup_temps():
     """Manually trigger cleanup of all temporary/partial files in the downloads directory."""
     logger.info("Manual temp file cleanup triggered.")
-    await concurrency.run_in_threadpool(_cleanup_temp_files, None)
+    await concurrency.run_in_threadpool(_cleanup_temp_files, None, True)
     return {"status": "cleaned"}
 
 @app.delete("/api/clear-history")
@@ -690,6 +786,46 @@ async def clear_history(db: Session = Depends(get_db)):
         logger.error(f"Failed to clear history: {e}")
         db.rollback()
         return {"status": "error", "message": str(e)}
+
+@app.post("/api/clear-completed")
+async def clear_completed_history(db: Session = Depends(get_db)):
+    """Clear only completed download records from the database."""
+    logger.info("Clearing completed download history from database.")
+    try:
+        query = db.query(DownloadRecord).filter(DownloadRecord.status == "completed")
+        count = query.count()
+        query.delete()
+        db.commit()
+        logger.success(f"Cleared {count} completed records.")
+        asyncio.create_task(broadcast_downloads())
+        return {"status": "cleared", "count": count}
+    except Exception as e:
+        logger.error(f"Failed to clear completed history: {e}")
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/settings")
+async def update_settings(req: SettingsUpdateRequest):
+    if req.speed_limit_kbps is not None:
+        set_speed_limit(req.speed_limit_kbps)
+    if req.max_concurrent is not None:
+        set_max_concurrent(req.max_concurrent)
+    if req.auto_categorize is not None:
+        set_auto_categorize(req.auto_categorize)
+    if req.download_path is not None:
+        set_base_download_dir(req.download_path)
+    return {
+        "status": "success",
+        "speed_limit_kbps": get_speed_limit(),
+        "max_concurrent": get_max_concurrent()
+    }
+
+@app.get("/api/settings")
+async def get_settings():
+    return {
+        "speed_limit_kbps": get_speed_limit(),
+        "max_concurrent": get_max_concurrent()
+    }
 
 @app.get("/api/stream/{download_id}")
 async def stream_file(download_id: str, db: Session = Depends(get_db)):

@@ -53,6 +53,9 @@ DEVICE_ID_FILE = os.path.join(DATA_DIR, "device_id")
 DISMISSED_FILE = os.path.join(DATA_DIR, "dismissed_announcements.json")
 OFFLINE_QUEUE_FILE = os.path.join(DATA_DIR, "offline_telemetry_queue.json")
 
+# A short cache keeps the local API responsive when the user opens Settings or
+# manually checks more than once, while still allowing a newly published
+# release to reach clients quickly.
 UPDATE_CACHE_TTL_SECONDS = 5 * 60
 _update_cache = {"checked_at": 0.0, "value": None}
 
@@ -267,8 +270,15 @@ _worker_thread.start()
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _parse_version(v_str):
-    """Parse a release version without treating trailing zeroes as newer."""
+    """Return a stable numeric version tuple, or ``None`` for an invalid value.
+
+    We intentionally compare the first four numeric components only.  This
+    makes ``3.9`` and ``3.9.0`` equal, instead of treating the latter as a
+    newer build just because it has an extra zero.
+    """
     value = str(v_str or "").strip()
+    if not value:
+        return None
     match = re.match(r"^v?(\d+(?:\.\d+){0,3})(?:[-+][0-9A-Za-z.-]+)?$", value)
     if not match:
         return None
@@ -277,6 +287,7 @@ def _parse_version(v_str):
 
 
 def _is_safe_public_url(value):
+    """Only pass absolute HTTPS links from remote configuration to the UI."""
     try:
         parsed = urlparse(str(value or "").strip())
         return parsed.scheme == "https" and bool(parsed.netloc)
@@ -410,6 +421,7 @@ def fetch_announcements():
             parsed_current = _parse_version(APP_VERSION)
             parsed_min = _parse_version(min_v) if min_v else None
             parsed_max = _parse_version(max_v) if max_v else None
+            # Bad targeting data should not take down the announcements feed.
             if min_v and (parsed_min is None or parsed_current is None or parsed_current < parsed_min):
                 continue
             if max_v and (parsed_max is None or parsed_current is None or parsed_current > parsed_max):
@@ -449,6 +461,7 @@ def check_for_update(force=False):
     now = time.monotonic()
     if not force and now - _update_cache["checked_at"] < UPDATE_CACHE_TTL_SECONDS:
         return _update_cache["value"]
+
     result = None
     try:
         update_doc = _get_document("app_config", "latest_update", timeout=8)
@@ -459,8 +472,12 @@ def check_for_update(force=False):
         latest = _parse_version(latest_version)
         current = _parse_version(APP_VERSION)
         if not latest_version or latest is None or current is None:
+            logger.warning("Ignoring an invalid update version in remote configuration.")
             return None
 
+        # Never show an update which cannot be opened safely by the desktop
+        # app.  The admin dashboard validates this too; this is defence in
+        # depth for data edited outside the dashboard.
         download_url = update_doc.get("download_url", "")
         if latest > current and _is_safe_public_url(download_url):
             result = {
@@ -483,11 +500,11 @@ def check_for_update(force=False):
 
 
 def get_public_links():
-    """Read the admin-managed public links with strict URL validation."""
+    """Return the website and legal links configured by the admin dashboard."""
     try:
         links = _get_document("app_config", "public_links", timeout=8) or {}
-        keys = ("website_url", "privacy_url", "terms_url", "support_url")
-        return {key: links[key] for key in keys if _is_safe_public_url(links.get(key))}
+        allowed = ("website_url", "privacy_url", "terms_url", "support_url")
+        return {key: links[key] for key in allowed if _is_safe_public_url(links.get(key))}
     except Exception as e:
         logger.debug(f"Failed to load public links: {e}")
         return {}

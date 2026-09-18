@@ -27,11 +27,26 @@
     "productName": "Ledo Downloader",
     "icon": "frontend/icon.ico",
     "win": {
-      "target": "portable",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
       "icon": "frontend/icon.ico"
     },
-    "portable": {
-      "artifactName": "LedoDownloader.exe"
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Ledo Downloader",
+      "artifactName": "Ledo-Downloader-Setup-${version}.exe",
+      "uninstallDisplayName": "Ledo Downloader",
+      "installerIcon": "frontend/icon.ico",
+      "uninstallerIcon": "frontend/icon.ico",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
     },
     "directories": {
       "output": "dist"
@@ -39,6 +54,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "integrity_check.js",
       "frontend/**/*"
     ],
     "extraResources": [
@@ -46,7 +62,11 @@
       "yt-dlp.exe",
       "ffmpeg.exe",
       "ffprobe.exe",
-      "aria2c.exe"
+      "aria2c.exe",
+      {
+        "from": "browser_extension",
+        "to": "browser_extension"
+      }
     ]
   }
 }

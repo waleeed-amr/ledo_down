@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" dir="ltr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -19,14 +19,14 @@
                         <line x1="12" y1="15" x2="12" y2="3"></line>
                     </svg>
                 </div>
-                <span class="app-name">Quick Add Download</span>
+                <span class="app-name">Quick Add</span>
                 <span class="domain-badge" id="domain-badge" style="display: none;">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
                     <span id="domain-text">direct-link</span>
                 </span>
             </div>
             <div class="title-right">
-                <span class="shortcut-chip" title="Shortcuts">Enter: Start | Esc: Close</span>
+                <span class="shortcut-chip" title="Shortcuts">Enter: start · Esc: close</span>
                 <button class="close-btn" id="btn-close" title="Close (Esc)">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
@@ -66,7 +66,7 @@
             </div>
 
             <!-- Sniffing Bar (Pulsing shimmer) -->
-            <div class="sniffing-bar" id="sniffing-loader" style="display: none;">
+            <div class="sniffing-bar" id="sniffing-loader" style="display: none;" role="status" aria-live="polite">
                 <div class="sniff-spinner"></div>
                 <span>Analyzing server & sniffing file info...</span>
             </div>
@@ -84,7 +84,13 @@
                 <div class="form-group">
                     <label class="form-label" for="url-input">Source URL</label>
                     <div class="input-with-action">
-                        <input type="text" id="url-input" class="form-input readonly-input" readonly placeholder="https://..." spellcheck="false">
+                        <input type="text" id="url-input" class="form-input" dir="ltr" inputmode="url" autocomplete="url" placeholder="Paste a link — video or file" spellcheck="false">
+                        <button type="button" class="action-btn action-btn-label" id="btn-paste-url" title="Paste and analyze link">
+                            Paste
+                        </button>
+                        <button type="button" class="action-btn" id="btn-analyze-url" title="Analyze link" aria-label="Analyze link">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="m21 21-4.35-4.35"></path><circle cx="11" cy="11" r="6"></circle></svg>
+                        </button>
                         <button type="button" class="action-btn" id="btn-copy-url" title="Copy URL">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                         </button>
@@ -127,7 +133,7 @@
                 <div class="form-group">
                     <label class="form-label" for="save-path-input">Save Location</label>
                     <div class="input-with-action">
-                        <input type="text" id="save-path-input" class="form-input" placeholder="Select download directory..." spellcheck="false">
+                        <input type="text" id="save-path-input" class="form-input" dir="auto" placeholder="Select download directory..." spellcheck="false">
                         <button type="button" class="action-btn" id="btn-browse" title="Browse folder">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
                             <span>Browse</span>

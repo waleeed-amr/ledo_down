@@ -10,51 +10,193 @@ import re
 import shutil
 from loguru import logger
 from database import DownloadRecord, SessionLocal
+from typing import Optional, List, Dict, Set
+
+try:
+    from telemetry_worker import report_error, report_exception
+except ImportError:
+    try:
+        from cloud_backend.telemetry_worker import report_error, report_exception
+    except ImportError:
+        def report_error(*a, **kw): pass
+        def report_exception(*a, **kw): pass
 
 import sys
 
-def get_base_dir():
+def get_resource_dir():
+    """
+    Returns the directory where bundled binaries (ffmpeg.exe, yt-dlp.exe, etc.) are located.
+    Handles:
+    - Packaged Electron app (resources/ directory)
+    - PyInstaller standalone (same directory or parent)
+    - Local development environment
+    """
     if getattr(sys, 'frozen', False):
-        return os.path.abspath(os.path.join(os.path.dirname(sys.executable), "..", "..", ".."))
+        exe_dir = os.path.dirname(sys.executable)
+        # 1. Electron resources dir: <InstallDir>/resources/backend/dist -> ../.. = <InstallDir>/resources
+        electron_res = os.path.abspath(os.path.join(exe_dir, "..", ".."))
+        if os.path.exists(os.path.join(electron_res, "ffmpeg.exe")) or os.path.exists(os.path.join(electron_res, "yt-dlp.exe")):
+            return electron_res
+        
+        # 2. In case resources is 1 level up:
+        one_up = os.path.abspath(os.path.join(exe_dir, ".."))
+        if os.path.exists(os.path.join(one_up, "ffmpeg.exe")) or os.path.exists(os.path.join(one_up, "yt-dlp.exe")):
+            return one_up
+
+        # 3. In root directory (<InstallDir>):
+        app_root = os.path.abspath(os.path.join(electron_res, ".."))
+        if os.path.exists(os.path.join(app_root, "ffmpeg.exe")) or os.path.exists(os.path.join(app_root, "yt-dlp.exe")):
+            return app_root
+
+        # 4. Same directory as executable:
+        if os.path.exists(os.path.join(exe_dir, "ffmpeg.exe")) or os.path.exists(os.path.join(exe_dir, "yt-dlp.exe")):
+            return exe_dir
+
+        return electron_res
     else:
         return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-BASE_DIR = get_base_dir()
-YT_DLP_PATH = os.path.abspath(os.path.join(BASE_DIR, "yt-dlp.exe"))
-if not os.path.exists(YT_DLP_PATH):
-    YT_DLP_PATH = shutil.which("yt-dlp") or "yt-dlp"
+BASE_DIR = get_resource_dir()
+
+def resolve_binary(binary_name):
+    """
+    Finds a bundled binary or falls back to system PATH.
+    """
+    # 1. Check in BASE_DIR (bundled resources or project root)
+    target = os.path.abspath(os.path.join(BASE_DIR, binary_name))
+    if os.path.exists(target):
+        return target
+    
+    # 2. Check in system PATH
+    sys_path = shutil.which(binary_name) or shutil.which(os.path.splitext(binary_name)[0])
+    if sys_path and os.path.exists(sys_path):
+        return sys_path
+        
+    return target
+
+YT_DLP_PATH = resolve_binary("yt-dlp.exe")
+FFMPEG_PATH = resolve_binary("ffmpeg.exe")
+
+# Automatically add resource directory to PATH so yt-dlp & child processes find ffmpeg & ffprobe
+if os.path.exists(BASE_DIR):
+    if BASE_DIR not in os.environ.get('PATH', ''):
+        os.environ['PATH'] = BASE_DIR + os.pathsep + os.environ.get('PATH', '')
+if FFMPEG_PATH and os.path.exists(FFMPEG_PATH):
+    ffmpeg_dir = os.path.dirname(FFMPEG_PATH)
+    if ffmpeg_dir not in os.environ.get('PATH', ''):
+        os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ.get('PATH', '')
 
 def get_default_downloads_dir():
-    if getattr(sys, 'frozen', False):
-        return os.path.join(os.path.expanduser('~'), 'Downloads', 'Ledo Downloader')
-    else:
-        return os.path.abspath(os.path.join(BASE_DIR, "downloads"))
+    """
+    Dynamically determines the user's Downloads folder from the OS.
+    Supports relocated Downloads folders, custom drive letters, and OneDrive.
+    """
+    # 1. Query Windows User Shell Folders registry
+    try:
+        import winreg
+        key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            raw_path, _ = winreg.QueryValueEx(key, "{374DE290-123F-4565-9164-39C4925E467B}")
+            expanded = os.path.expandvars(raw_path)
+            if os.path.exists(expanded):
+                return os.path.join(expanded, "Ledo Downloader")
+    except Exception:
+        pass
+    
+    # 2. Fallback to standard user home directory
+    user_home = os.path.expanduser('~')
+    downloads_path = os.path.join(user_home, 'Downloads')
+    if os.path.exists(downloads_path):
+        return os.path.join(downloads_path, "Ledo Downloader")
+        
+    return os.path.join(user_home, "Ledo Downloader")
 
 BASE_DOWNLOAD_DIR = get_default_downloads_dir()
 
 # File Categories
 CATEGORIES = {
-    "Videos": [".mp4", ".mkv", ".avi", ".flv", ".mov"],
-    "Audio": [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".webm"],
-    "Archives": [".zip", ".rar", ".7z", ".tar", ".gz", ".iso"],
-    "Documents": [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt"],
-    "Programs": [".exe", ".msi", ".apk", ".dmg"]
+    "Videos": [".mp4", ".mkv", ".avi", ".flv", ".mov", ".wmv", ".webm", ".m4v", ".3gp", ".ts", ".vob", ".mpg", ".mpeg", ".hevc", ".m3u8"],
+    "Audio": [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".wma", ".opus", ".aiff", ".mid"],
+    "Images": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".ico", ".tiff", ".heic", ".avif", ".jxl"],
+    "Archives": [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".zst", ".tgz", ".cab", ".iso", ".img", ".vhd", ".wim"],
+    "Documents": [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv", ".epub", ".mobi", ".rtf"],
+    "Programs": [".exe", ".msi", ".msix", ".appx", ".apk", ".dmg", ".pkg", ".deb", ".rpm", ".appimage", ".jar", ".run", ".bin"]
 }
 
-def get_category_dir(filename):
+AUTO_CATEGORIZE = True
+
+def set_auto_categorize(enabled: bool):
+    global AUTO_CATEGORIZE
+    AUTO_CATEGORIZE = bool(enabled)
+    logger.info(f"Auto categorize set to: {AUTO_CATEGORIZE}")
+
+def set_base_download_dir(new_path: str):
+    global BASE_DOWNLOAD_DIR
+    if new_path:
+        norm = os.path.abspath(os.path.normpath(new_path))
+        os.makedirs(norm, exist_ok=True)
+        BASE_DOWNLOAD_DIR = norm
+        logger.info(f"Base download directory set to: {BASE_DOWNLOAD_DIR}")
+
+def get_category_dir(filename, base_dir=None):
+    root = base_dir or BASE_DOWNLOAD_DIR
+    if not AUTO_CATEGORIZE:
+        os.makedirs(root, exist_ok=True)
+        return root
     ext = os.path.splitext(filename)[1].lower()
     for cat, exts in CATEGORIES.items():
         if ext in exts:
-            cat_dir = os.path.join(BASE_DOWNLOAD_DIR, cat)
+            cat_dir = os.path.join(root, cat)
             os.makedirs(cat_dir, exist_ok=True)
             return cat_dir
     
-    other_dir = os.path.join(BASE_DOWNLOAD_DIR, "Others")
+    other_dir = os.path.join(root, "Others")
     os.makedirs(other_dir, exist_ok=True)
     return other_dir
 
 active_downloads = {}
-download_semaphore = threading.Semaphore(2)
+
+class DynamicSemaphore:
+    def __init__(self, value=3):
+        self._value = max(1, int(value))
+        self._current = 0
+        self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
+
+    def set_value(self, value):
+        with self._lock:
+            self._value = max(1, int(value))
+            self._cond.notify_all()
+        logger.info(f"Max concurrent downloads updated to: {self._value}")
+
+    def get_value(self):
+        with self._lock:
+            return self._value
+
+    def acquire(self):
+        with self._lock:
+            while self._current >= self._value:
+                self._cond.wait()
+            self._current += 1
+
+    def release(self):
+        with self._lock:
+            self._current = max(0, self._current - 1)
+            self._cond.notify()
+
+    def __enter__(self):
+        self.acquire()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+
+download_semaphore = DynamicSemaphore(3)
+
+def set_max_concurrent(count: int):
+    download_semaphore.set_value(count)
+
+def get_max_concurrent() -> int:
+    return download_semaphore.get_value()
 
 GLOBAL_SPEED_LIMIT_KBPS = 0  # 0 = unlimited
 
@@ -93,7 +235,7 @@ class DownloadContext:
         self.thread_stop_event = threading.Event()
         self.process = None
 
-def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, quality="best", cookies=None, user_agent=None, referer=None, existing_id=None):
+def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, quality="best", cookies=None, user_agent=None, referer=None, existing_id=None, title=None):
     if save_path:
         norm_path = os.path.normpath(save_path)
         if not os.path.isabs(norm_path):
@@ -119,12 +261,17 @@ def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, qua
             url=url,
             is_yt_dlp=use_ytdlp,
             status="starting",
-            filename="",
+            filename=title if title else "",
             total_size=0,
             downloaded=0,
             speed=0,
             progress=0.0,
-            created_at=time.time() * 1000
+            created_at=time.time() * 1000,
+            save_path=save_path,
+            quality=quality,
+            cookies=cookies,
+            user_agent=user_agent,
+            referer=referer
         )
         db.add(db_rec)
         db.commit()
@@ -138,7 +285,11 @@ def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, qua
         thread.start()
     else:
         def run_async_download():
-            asyncio.run(_run_chunked_download_async(ctx))
+            with download_semaphore:
+                if ctx.thread_stop_event.is_set() or ctx.stop_event.is_set():
+                    return
+                _update_db(ctx, status="downloading")
+                asyncio.run(_run_chunked_download_async(ctx))
         
         thread = threading.Thread(target=run_async_download)
         thread.daemon = True
@@ -171,7 +322,10 @@ def _run_ytdlp(ctx: DownloadContext):
             
         logger.info(f"Starting yt-dlp download: {ctx.id}")
         _update_db(ctx, status="downloading")
-    
+        
+        _run_ytdlp_inner(ctx)
+
+def _run_ytdlp_inner(ctx: DownloadContext):
     # Resolve short URLs for TikTok, Instagram, etc.
     url = ctx.url
     if any(short in url for short in ["vt.tiktok.com", "vm.tiktok.com", "instagram.com/reel", "t.co/", "fb.watch"]):
@@ -202,16 +356,22 @@ def _run_ytdlp(ctx: DownloadContext):
         except Exception as e:
             logger.error(f"Failed to resolve Spotify track: {e}")
             
-    video_dir = ctx.save_path if ctx.save_path else os.path.join(BASE_DOWNLOAD_DIR, "Videos")
+    if ctx.save_path:
+        video_dir = ctx.save_path
+    elif not AUTO_CATEGORIZE:
+        video_dir = BASE_DOWNLOAD_DIR
+    elif ctx.quality == "audio":
+        video_dir = os.path.join(BASE_DOWNLOAD_DIR, "Audio")
+    else:
+        video_dir = os.path.join(BASE_DOWNLOAD_DIR, "Videos")
     os.makedirs(video_dir, exist_ok=True)
     
-    FFMPEG_PATH = os.path.abspath(os.path.join(BASE_DIR, "ffmpeg.exe"))
-    if not os.path.exists(FFMPEG_PATH):
-        FFMPEG_PATH = shutil.which("ffmpeg")
-    if not FFMPEG_PATH or not os.path.exists(FFMPEG_PATH):
-        fallback_path = r"C:\build\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe"
-        if os.path.exists(fallback_path):
-            FFMPEG_PATH = fallback_path
+    FFMPEG_PATH = resolve_binary("ffmpeg.exe")
+    if FFMPEG_PATH and os.path.exists(FFMPEG_PATH):
+        ffmpeg_dir = os.path.dirname(FFMPEG_PATH)
+        if ffmpeg_dir not in os.environ.get('PATH', ''):
+            os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ.get('PATH', '')
+
     
     last_update = time.time()
     
@@ -356,8 +516,13 @@ def _run_ytdlp(ctx: DownloadContext):
             if info_dict is None:
                 raise Exception("Failed to extract video information or video unavailable.")
                 
-            logger.success(f"yt-dlp download {ctx.id} completed.")
-            _update_db(ctx, progress=100.0, status="completed")
+            logger.success(f"yt-dlp download {ctx.id} finished processing.")
+            # Check if user requested pause during post-processing (ffmpeg merge/convert)
+            if ctx.stop_event.is_set():
+                logger.info(f"yt-dlp download {ctx.id} was paused during post-processing, marking as paused.")
+                _update_db(ctx, progress=100.0, status="paused")
+            else:
+                _update_db(ctx, progress=100.0, status="completed")
             # Clean up any leftover yt-dlp temp files after successful completion
             _cleanup_ytdlp_temps(video_dir)
             
@@ -368,6 +533,11 @@ def _run_ytdlp(ctx: DownloadContext):
             # Do NOT clean up part files on pause so it can resume
         else:
             logger.exception(f"yt-dlp error for {ctx.id}: {e}")
+            try:
+                domain = urlparse(ctx.url).netloc if ctx.url else "unknown"
+                report_exception(e, context=f"yt-dlp error ({ctx.title or ctx.url})", domain=domain)
+            except Exception:
+                pass
             _update_db(ctx, status="error", error_message=str(e))
             # Clean up temp files only on hard error
             _cleanup_ytdlp_temps(video_dir)
@@ -384,7 +554,13 @@ async def _download_chunk_async(ctx, session, start, end, part_num, final_path, 
     if existing_size >= (end - start + 1):
         async with lock:
             downloaded_list[0] += (end - start + 1)
+            last_update_list[1] += (end - start + 1)
         return part_path
+
+    if existing_size > 0:
+        async with lock:
+            downloaded_list[0] += existing_size
+            last_update_list[1] += existing_size
 
     # Adjust start byte based on what we already have
     current_start = start + existing_size
@@ -428,44 +604,278 @@ async def _download_chunk_async(ctx, session, start, end, part_num, final_path, 
         logger.error(f"Error in chunk {part_num} for {ctx.id}: {e}")
         raise e
 
-def _extract_filename(headers, original_url, final_url):
-    import re
-    from urllib.parse import urlparse, unquote
+# --- Universal File Extension & Filename Extraction Utilities ---
+
+# Server scripts and web pages that should NEVER be treated as target download filenames
+SERVER_SCRIPT_EXTENSIONS = {
+    '.php', '.asp', '.aspx', '.jsp', '.jspx', '.do', '.action', '.cgi',
+    '.pl', '.cfm', '.html', '.htm', '.shtml', '.xhtml'
+}
+
+# Domains that are video/audio streaming services (handled by yt-dlp)
+STREAMING_DOMAINS = {
+    'youtube.com', 'youtu.be', 'tiktok.com', 'instagram.com', 'facebook.com',
+    'fb.watch', 'twitter.com', 'x.com', 'twitch.tv', 'vimeo.com',
+    'dailymotion.com', 'soundcloud.com', 'reddit.com'
+}
+
+# Non-media direct file extensions. If ANY of these appear in path or query,
+# the URL is 100% a direct file download and MUST NEVER be sent to yt-dlp.
+NON_MEDIA_DIRECT_EXTENSIONS = {
+    # Programs & Installers
+    '.exe', '.msi', '.msix', '.appx', '.appimage', '.dmg', '.pkg', '.deb',
+    '.rpm', '.apk', '.aab', '.xapk', '.snap', '.flatpak', '.run', '.bin',
+    '.jar', '.war', '.ear',
+    # Archives & Compressed
+    '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.zst', '.lz',
+    '.lzma', '.tgz', '.tbz2', '.txz', '.cab', '.iso', '.img', '.vhd',
+    '.vmdk', '.ova', '.qcow2', '.wim', '.z', '.lz4', '.br', '.zstd',
+    # Documents & Ebooks
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt',
+    '.ods', '.odp', '.rtf', '.txt', '.csv', '.tsv', '.epub', '.mobi',
+    '.azw3', '.djvu', '.xps', '.pages', '.numbers', '.key',
+    # Fonts
+    '.ttf', '.otf', '.woff', '.woff2', '.eot',
+    # Data & Config
+    '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
+    '.sql', '.db', '.sqlite', '.sqlite3', '.bak', '.dat', '.log',
+    # Misc
+    '.torrent', '.nfo', '.srt', '.sub', '.ass', '.vtt', '.ics',
+    '.vcf', '.gpx', '.kml', '.kmz',
+}
+
+# Direct media extensions
+DIRECT_MEDIA_EXTENSIONS = {
+    # Video
+    '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
+    '.3gp', '.3g2', '.ts', '.mts', '.m2ts', '.vob', '.ogv', '.mpg',
+    '.mpeg', '.divx', '.asf', '.rm', '.rmvb', '.f4v',
+    # Audio
+    '.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.wma', '.opus',
+    '.aiff', '.aif', '.mid', '.midi', '.ape', '.alac', '.dsf', '.dff',
+    '.tak', '.tta', '.mka', '.ac3', '.dts', '.pcm',
+    # Images
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.svg', '.webp', '.ico',
+    '.tiff', '.tif', '.psd', '.ai', '.eps', '.raw', '.cr2', '.nef',
+    '.arw', '.dng', '.heic', '.heif', '.avif', '.jxl',
+}
+
+KNOWN_EXTENSIONS = NON_MEDIA_DIRECT_EXTENSIONS | DIRECT_MEDIA_EXTENSIONS
+
+# MIME type -> extension mapping for last-resort inference
+MIME_TO_EXT = {
+    'application/x-msdownload': '.exe', 'application/x-msi': '.msi',
+    'application/x-dosexec': '.exe',
+    'application/zip': '.zip', 'application/x-rar-compressed': '.rar',
+    'application/x-7z-compressed': '.7z', 'application/x-tar': '.tar',
+    'application/gzip': '.gz', 'application/x-bzip2': '.bz2',
+    'application/x-xz': '.xz', 'application/zstd': '.zst',
+    'application/x-iso9660-image': '.iso',
+    'application/pdf': '.pdf',
+    'application/vnd.android.package-archive': '.apk',
+    'application/x-apple-diskimage': '.dmg',
+    'application/octet-stream': '',  # generic, no extension to infer
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+    'application/msword': '.doc', 'application/vnd.ms-excel': '.xls',
+    'application/vnd.ms-powerpoint': '.ppt',
+    'video/mp4': '.mp4', 'video/x-matroska': '.mkv', 'video/webm': '.webm',
+    'video/x-msvideo': '.avi', 'video/quicktime': '.mov',
+    'audio/mpeg': '.mp3', 'audio/wav': '.wav', 'audio/flac': '.flac',
+    'audio/ogg': '.ogg', 'audio/mp4': '.m4a', 'audio/webm': '.webm',
+    'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif',
+    'image/webp': '.webp', 'image/svg+xml': '.svg',
+}
+
+def looks_like_filename(val: str) -> bool:
+    """Check if a string looks like a valid filename with a known file extension."""
+    if not val or len(val) < 3:
+        return False
+    clean = val.split('?')[0].split('#')[0]
+    basename = os.path.basename(clean)
+    if not basename or len(basename) < 3:
+        return False
+    ext = os.path.splitext(basename)[1].lower()
+    return ext in KNOWN_EXTENSIONS and ext not in SERVER_SCRIPT_EXTENSIONS
+
+def extract_filename_from_query(query_str: str) -> Optional[str]:
+    """
+    Universally inspects ALL query parameters in a query string for filenames.
+    Works for any CDN or web service (Broadcom, S3, Azure, Cloudflare, etc.)
+    regardless of whether parameters are named 'file', 'name', 'token', or random keys.
+    Also handles embedded Content-Disposition (e.g. AWS S3 response-content-disposition).
+    """
+    if not query_str:
+        return None
     
-    filename = None
-    content_disposition = headers.get('Content-Disposition', '')
-    
-    if content_disposition:
-        # Check for RFC 5987 filename*=UTF-8''...
-        m_utf8 = re.search(r"filename\*=UTF-8''(.+)", content_disposition, re.IGNORECASE)
-        if m_utf8:
-            filename = unquote(m_utf8.group(1))
-        else:
-            # Check for regular filename="..."
-            m = re.search(r'filename="?([^"]+)"?', content_disposition)
-            if m:
-                filename = m.group(1)
-                
-    if not filename:
-        # Fallback to URL path
-        parsed_path = unquote(urlparse(final_url).path)
-        filename = os.path.basename(parsed_path)
-        
-        if not filename or len(filename) < 3:
-            # Try original URL
-            parsed_path_orig = unquote(urlparse(original_url).path)
-            filename = os.path.basename(parsed_path_orig)
+    from urllib.parse import parse_qs, unquote
+    parsed_qs = parse_qs(query_str, keep_blank_values=False)
+    candidates = []
+
+    for param_name, values in parsed_qs.items():
+        param_name_lower = param_name.lower()
+        for raw_val in values:
+            if not raw_val or len(raw_val) < 3:
+                continue
             
+            # 1. Check for embedded Content-Disposition inside query param
+            m_utf8 = re.search(r"filename\*\s*=\s*UTF-8''(.+?)(?:;|$|&)", raw_val, re.IGNORECASE)
+            if m_utf8:
+                fn = unquote(m_utf8.group(1)).strip().strip('"\'')
+                if looks_like_filename(fn):
+                    candidates.append((200, fn))
+                    continue
+            m = re.search(r'filename\s*=\s*"?([^";&]+)"?', raw_val, re.IGNORECASE)
+            if m:
+                fn = unquote(m.group(1)).strip().strip('"\'')
+                if looks_like_filename(fn):
+                    candidates.append((200, fn))
+                    continue
+
+            # 2. Decode value and strip secondary query/fragment
+            decoded = unquote(raw_val)
+            clean_val = decoded.split('?')[0].split('#')[0]
+            basename = os.path.basename(clean_val)
+
+            if basename and len(basename) >= 3 and looks_like_filename(basename):
+                # Calculate priority score
+                score = 10
+                # High priority if parameter name commonly denotes a filename
+                if any(k in param_name_lower for k in ['file', 'filename', 'name', 'dl', 'download', 'package', 'asset', 'path']):
+                    score += 50
+                # Bonus if extension is an explicit software installer or archive
+                ext = os.path.splitext(basename)[1].lower()
+                if ext in NON_MEDIA_DIRECT_EXTENSIONS:
+                    score += 30
+                # Tie-breaker: prefer longer descriptive names
+                score += min(len(basename), 30)
+                candidates.append((score, basename))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+    
+    return None
+
+def detect_filename_from_url(url: str) -> Optional[str]:
+    """
+    Extracts a filename from a URL by inspecting both the path and all query parameters.
+    Gives priority to query parameter filenames if the path is generic or a server script.
+    """
+    if not url:
+        return None
+    try:
+        from urllib.parse import urlparse, unquote
+        parsed = urlparse(url)
+        path_name = os.path.basename(unquote(parsed.path))
+        path_ext = os.path.splitext(path_name)[1].lower() if path_name else ""
+
+        # Check query string first (any query parameter)
+        query_fn = extract_filename_from_query(parsed.query)
+
+        if query_fn:
+            # If path has no extension, or is a server script (.php, .asp, etc.),
+            # or is generic (e.g. 'download', 'file', 'get', 'index'), query filename WINS.
+            if (not path_ext or 
+                path_ext in SERVER_SCRIPT_EXTENSIONS or 
+                path_ext not in KNOWN_EXTENSIONS or
+                path_name.lower() in {'download', 'get', 'file', 'index', 'api', 'v1', 'v2'}):
+                return query_fn
+            # If both have known extensions, prefer query if it's a dedicated installer/archive
+            query_ext = os.path.splitext(query_fn)[1].lower()
+            if query_ext in NON_MEDIA_DIRECT_EXTENSIONS and path_ext not in NON_MEDIA_DIRECT_EXTENSIONS:
+                return query_fn
+            return query_fn
+
+        # Otherwise check path name
+        if path_name and len(path_name) >= 3 and path_ext in KNOWN_EXTENSIONS and path_ext not in SERVER_SCRIPT_EXTENSIONS:
+            return path_name
+            
+        return None
+    except Exception:
+        return None
+
+def extract_filename(headers, original_url, final_url=None) -> str:
+    """
+    Universal filename extractor. Works with any URL structure:
+    - Content-Disposition header (RFC 5987 / RFC 6266)
+    - URL query parameter scanner (handles any parameter key)
+    - URL path basename
+    - Content-Type → extension inference as last resort
+    """
+    from urllib.parse import urlparse, unquote
+    headers = headers or {}
+    filename = None
+    content_disposition = headers.get('Content-Disposition') or headers.get('content-disposition', '')
+    
+    # Priority 1: Content-Disposition header (most reliable from server)
+    if content_disposition:
+        m_utf8 = re.search(r"filename\*\s*=\s*UTF-8''(.+?)(?:;|$)", content_disposition, re.IGNORECASE)
+        if m_utf8:
+            filename = unquote(m_utf8.group(1).strip()).strip('"\'')
+        else:
+            m = re.search(r'filename\s*=\s*"?([^";]+)"?', content_disposition, re.IGNORECASE)
+            if m:
+                filename = m.group(1).strip().strip('"\'')
+
+    # Priority 2: Extract from final_url or original_url (query params + path)
+    if not filename or not looks_like_filename(filename):
+        for candidate_url in [final_url, original_url]:
+            if candidate_url:
+                detected = detect_filename_from_url(candidate_url)
+                if detected:
+                    filename = detected
+                    break
+
+    # Priority 3: Path basename fallback (even if extension unknown, if not a script)
     if not filename or filename == '/' or len(filename) < 2:
+        for candidate_url in [final_url, original_url]:
+            if candidate_url:
+                try:
+                    p = unquote(urlparse(candidate_url).path)
+                    bn = os.path.basename(p.rstrip('/'))
+                    ext = os.path.splitext(bn)[1].lower()
+                    if bn and len(bn) >= 3 and ext not in SERVER_SCRIPT_EXTENSIONS:
+                        filename = bn
+                        break
+                except Exception:
+                    pass
+
+    # Priority 4: Content-Type MIME inference
+    content_type = (headers.get('Content-Type') or headers.get('content-type', '')).split(';')[0].strip().lower()
+    inferred_ext = MIME_TO_EXT.get(content_type, '')
+
+    if not filename or filename == '/' or len(filename) < 2 or filename == 'downloaded_file':
+        if inferred_ext:
+            try:
+                domain = urlparse(original_url).hostname or 'download'
+                domain = domain.replace('www.', '').split('.')[0]
+                filename = f"{domain}_download{inferred_ext}"
+            except Exception:
+                filename = f"downloaded_file{inferred_ext}"
+        else:
+            filename = "downloaded_file"
+    elif inferred_ext:
+        # If we have a filename but it lacks an extension, append inferred one
+        _base, _ext = os.path.splitext(filename)
+        if not _ext or _ext.lower() not in KNOWN_EXTENSIONS:
+            filename = _base + inferred_ext
+
+    # Sanitize for Windows filesystems
+    filename = re.sub(r'[<>:"/\\|?*]', '_', filename).strip().rstrip('. ')
+    if len(filename) > 240:
+        base, ext = os.path.splitext(filename)
+        filename = base[:240 - len(ext)] + ext
+    if not filename:
         filename = "downloaded_file"
-        
-    # Clean up weird characters that might be invalid on Windows
-    filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
     return filename
+
+# Backward-compatibility alias for internal callers
+_extract_filename = extract_filename
 
 async def _run_chunked_download_async(ctx: DownloadContext):
     logger.info(f"Starting async chunk download: {ctx.id}")
-    _update_db(ctx, status="downloading")
     
     # Default browser-like headers for direct file downloads
     default_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
@@ -541,7 +951,7 @@ async def _run_chunked_download_async(ctx: DownloadContext):
                 cat_dir = get_category_dir(filename)
             final_path = os.path.join(cat_dir, filename)
             
-            _update_db(ctx, total_size=total_size, filename=filename)
+            _update_db(ctx, total_size=total_size, filename=filename, status="downloading")
             logger.info(f"Download size for {ctx.id}: {total_size} bytes. Filename: {filename}. Target: {final_path}")
             
             if total_size == 0 or head_headers.get('Accept-Ranges') != 'bytes':
@@ -596,17 +1006,21 @@ async def _run_chunked_download_async(ctx: DownloadContext):
                     
             logger.success(f"Chunked download {ctx.id} completed successfully.")
             _update_db(ctx, progress=100.0, status="completed", downloaded=total_size)
+            import gc; gc.collect()
         
     except Exception as e:
         logger.exception(f"Async chunk download error for {ctx.id}: {e}")
+        try:
+            domain = urlparse(ctx.url).netloc if ctx.url else "unknown"
+            report_exception(e, context=f"Chunk download error ({ctx.filename or ctx.url})", domain=domain)
+        except Exception:
+            pass
         _update_db(ctx, status="error", error_message=str(e))
         # DO NOT clean up part files on error, allow the user to retry/resume
 
 async def _normal_download_async(ctx: DownloadContext, session, path, total_size, extra_headers=None):
     try:
         start_time = time.time()
-        downloaded = [0]
-        last_update = [time.time(), 0]
         actual_total = total_size
 
         headers = extra_headers.copy() if extra_headers else {}
@@ -615,10 +1029,37 @@ async def _normal_download_async(ctx: DownloadContext, session, path, total_size
         if ctx.cookies and 'Cookie' not in headers:
             headers['Cookie'] = ctx.cookies
 
+        # Resume support: check for existing partial file
+        existing_size = 0
+        file_mode = 'wb'
+        if os.path.exists(path):
+            existing_size = os.path.getsize(path)
+            if existing_size > 0 and actual_total > 0 and existing_size < actual_total:
+                headers['Range'] = f'bytes={existing_size}-'
+                file_mode = 'ab'
+                logger.info(f"Resuming normal download {ctx.id} from byte {existing_size}")
+            elif existing_size > 0 and existing_size >= actual_total and actual_total > 0:
+                # File is already complete
+                logger.info(f"Normal download {ctx.id} already complete on disk.")
+                _update_db(ctx, progress=100.0, status='completed', downloaded=actual_total, total_size=actual_total)
+                return
+
+        downloaded = [existing_size]
+        last_update = [time.time(), existing_size]
+
         async with session.get(ctx.url, headers=headers, allow_redirects=True) as response:
+            # If server doesn't support Range (returns 200 instead of 206), start fresh
+            if existing_size > 0 and response.status == 200:
+                existing_size = 0
+                downloaded[0] = 0
+                last_update[1] = 0
+                file_mode = 'wb'
+
             # Update total_size from response if HEAD didn't provide it
             if actual_total == 0:
                 actual_total = int(response.headers.get('Content-Length', 0))
+                if existing_size > 0 and response.status == 206:
+                    actual_total += existing_size
                 if actual_total > 0:
                     _update_db(ctx, total_size=actual_total)
             
@@ -627,9 +1068,11 @@ async def _normal_download_async(ctx: DownloadContext, session, path, total_size
             if resp_filename and resp_filename != 'downloaded_file':
                 current_dir = os.path.dirname(path)
                 path = os.path.join(current_dir, resp_filename)
-                _update_db(ctx, filename=resp_filename)
+                _update_db(ctx, filename=resp_filename, status='downloading')
+            else:
+                _update_db(ctx, status='downloading')
             
-            async with aiofiles.open(path, 'wb') as f:
+            async with aiofiles.open(path, file_mode) as f:
                 async for chunk in response.content.iter_chunked(131072):
                     if ctx.stop_event.is_set():
                         _update_db(ctx, status='paused')
@@ -643,7 +1086,7 @@ async def _normal_download_async(ctx: DownloadContext, session, path, total_size
                         if now - last_update[0] > 0.5:
                             prog = (downloaded[0] / actual_total) * 100 if actual_total > 0 else 0
                             current_speed = (downloaded[0] - last_update[1]) / (now - last_update[0]) if now > last_update[0] else 0
-                            _update_db(ctx, progress=prog, speed=current_speed, downloaded=downloaded[0])
+                            _update_db(ctx, progress=prog, speed=current_speed, downloaded=downloaded[0], status='downloading')
                             last_update[0] = now
                             last_update[1] = downloaded[0]
                         if GLOBAL_SPEED_LIMIT_KBPS > 0:
@@ -653,8 +1096,14 @@ async def _normal_download_async(ctx: DownloadContext, session, path, total_size
         final_size = downloaded[0] if downloaded[0] > 0 else actual_total
         logger.success(f"Normal download {ctx.id} completed successfully. Size: {final_size}")
         _update_db(ctx, progress=100.0, status='completed', downloaded=final_size, total_size=final_size)
+        import gc; gc.collect()
     except Exception as e:
         logger.exception(f"Normal download error for {ctx.id}: {e}")
+        try:
+            domain = urlparse(ctx.url).netloc if ctx.url else "unknown"
+            report_exception(e, context=f"Normal download error ({ctx.filename or ctx.url})", domain=domain)
+        except Exception:
+            pass
         _update_db(ctx, status='error', error_message=str(e))
 
 
