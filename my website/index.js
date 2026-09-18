@@ -254,7 +254,7 @@ async function loadUsers() {
             tr.innerHTML = `
                 <td>${escapeHtml(username)}</td>
                 <td>${avatarHtml}</td>
-                <td>${data.createdAt ? new Date(data.createdAt).toLocaleDateString('ar-EG') : '—'}</td>
+                <td>${formatDate(data.createdAt)}</td>
                 <td>
                     <button class="btn outline btn-sm btn-msg-user" data-uid="${uid}" data-name="${escapeHtml(username)}">
                         <i class='bx bx-envelope'></i> رسالة
@@ -495,7 +495,7 @@ function openChat(uid, displayName) {
             const isAdmin = msg.isAdmin === true;
             const bubble = document.createElement('div');
             bubble.className = `chat-bubble ${isAdmin ? 'admin' : 'user'}`;
-            const time = msg.createdAt ? new Date(msg.createdAt.seconds * 1000).toLocaleString('ar-EG') : '';
+            const time = msg.createdAt ? formatDate(msg.createdAt) : '';
             bubble.innerHTML = `
                 <div>${escapeHtml(msg.text || '')}</div>
                 <div class="bubble-time">${time}</div>
@@ -559,7 +559,7 @@ async function loadCrashes() {
             const data = docSnap.data();
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${data.createdAt ? new Date(data.createdAt).toLocaleString('ar-EG') : '—'}</td>
+                <td>${formatDate(data.createdAt)}</td>
                 <td title="${escapeHtml(data.message || '')}">${escapeHtml((data.message || '').slice(0, 80))}</td>
                 <td>${escapeHtml(data.error_category || data.category || '—')}</td>
                 <td>
@@ -659,4 +659,12 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str || '';
     return div.innerHTML;
+}
+
+function formatDate(val) {
+    if (!val) return '—';
+    if (typeof val.toDate === 'function') return val.toDate().toLocaleString('ar-EG');
+    if (val.seconds) return new Date(val.seconds * 1000).toLocaleString('ar-EG');
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? '—' : d.toLocaleString('ar-EG');
 }
