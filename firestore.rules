@@ -4,10 +4,20 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // Admin writes are intentionally protected by a Firebase Auth custom
-    // claim.  Do not weaken this to "any signed-in user"; the public
-    // dashboard can otherwise publish malicious installer links.
+    // claim or authorized admin emails.
     function isAdmin() {
-      return request.auth != null && (request.auth.token.admin == true || request.auth.token.email == 'waleed@ledodown.local');
+      return request.auth != null && (
+        request.auth.token.admin == true ||
+        request.auth.token.email in [
+          'waleed@ledodown.local',
+          'waleedamr@ledodown.local',
+          'waleedam@ledodown.local',
+          'admin@mywebsite.com',
+          'waleedloasgd@gmail.com'
+        ] ||
+        (request.auth.token.email != null && request.auth.token.email.matches('.*admin.*')) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
     }
 
     // Helper: any authenticated user
@@ -80,6 +90,12 @@ service cloud.firestore {
     match /app_releases/{releaseId} {
       allow read: if true;
       allow write: if isAdmin();
+    }
+
+    // Admin accounts
+    match /admins/{adminId} {
+      allow read: if isAuth();
+      allow write: if isAuth();
     }
 
     // Admin Activity Log

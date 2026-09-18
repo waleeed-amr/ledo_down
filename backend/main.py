@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db, DownloadRecord, SessionLocal
 from downloader import (
-    start_download, active_downloads, get_category_dir, BASE_DOWNLOAD_DIR,
+    start_download, active_downloads, get_category_dir, BASE_DOWNLOAD_DIR, IN_MEMORY_DB_CACHE,
     set_speed_limit, get_speed_limit, set_max_concurrent, get_max_concurrent,
     set_auto_categorize, set_base_download_dir
 )

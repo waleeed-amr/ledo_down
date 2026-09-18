@@ -68,6 +68,9 @@ function saveSettings(settings) {
 let appSettings = loadSettings();
 
 function applySettings() {
+    document.body.classList.toggle('power-saver', !!appSettings.powerSaver);
+    document.body.classList.toggle('reduce-hover', !!appSettings.reduceHover);
+    document.body.classList.toggle('compact-mode', !!appSettings.compactMode);
     // Power Saver
     if (appSettings.powerSaver) {
         document.body.classList.add('power-saver');
@@ -198,6 +201,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 // Settings Event Listeners
 document.getElementById('checkbox-power-saver')?.addEventListener('change', (e) => {
     appSettings.powerSaver = e.target.checked;
+    document.body.classList.toggle('power-saver', e.target.checked);
     saveSettings(appSettings);
     applySettings();
     initVanta();
@@ -206,6 +210,7 @@ document.getElementById('checkbox-power-saver')?.addEventListener('change', (e) 
 
 document.getElementById('checkbox-reduce-hover')?.addEventListener('change', (e) => {
     appSettings.reduceHover = e.target.checked;
+    document.body.classList.toggle('reduce-hover', e.target.checked);
     saveSettings(appSettings);
     applySettings();
     showToast(e.target.checked ? 'Hover Effects: Reduced' : 'Hover Effects: Normal', '#6366f1');
@@ -213,6 +218,7 @@ document.getElementById('checkbox-reduce-hover')?.addEventListener('change', (e)
 
 document.getElementById('checkbox-compact-mode')?.addEventListener('change', (e) => {
     appSettings.compactMode = e.target.checked;
+    document.body.classList.toggle('compact-mode', e.target.checked);
     saveSettings(appSettings);
     applySettings();
     showToast(e.target.checked ? 'Compact Mode: ON' : 'Compact Mode: OFF', '#3b82f6');

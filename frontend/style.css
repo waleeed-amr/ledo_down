@@ -22,7 +22,7 @@
 
     /* Level 1: Surface — Sidebar, TopBar, Right Sidebar */
     --glass-surface-bg: rgba(15, 23, 42, 0.55);
-    --glass-surface-blur: 8px;
+    --glass-surface-blur: 2px;
     --glass-surface-saturate: 200%;
     --glass-surface-border-top: rgba(255, 255, 255, 0.22);
     --glass-surface-border-bottom: rgba(255, 255, 255, 0.06);
@@ -35,7 +35,7 @@
 
     /* Level 2: Elevated — Cards, Settings sections */
     --glass-elevated-bg: rgba(255, 255, 255, 0.07);
-    --glass-elevated-blur: 6px;
+    --glass-elevated-blur: 2px;
     --glass-elevated-saturate: 180%;
     --glass-elevated-border-top: rgba(255, 255, 255, 0.18);
     --glass-elevated-border-bottom: rgba(255, 255, 255, 0.04);
@@ -48,7 +48,7 @@
 
     /* Level 3: Floating — Modals, Drawers, Tooltips */
     --glass-floating-bg: rgba(15, 23, 42, 0.65);
-    --glass-floating-blur: 10px;
+    --glass-floating-blur: 2px;
     --glass-floating-saturate: 200%;
     --glass-floating-border-top: rgba(255, 255, 255, 0.25);
     --glass-floating-border-bottom: rgba(255, 255, 255, 0.08);
@@ -62,7 +62,7 @@
 
     /* Level 4: Interactive — Buttons, Inputs */
     --glass-interactive-bg: rgba(255, 255, 255, 0.08);
-    --glass-interactive-blur: 4px;
+    --glass-interactive-blur: 2px;
     --glass-interactive-saturate: 160%;
     --glass-interactive-border: rgba(255, 255, 255, 0.15);
     --glass-interactive-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
@@ -259,40 +259,16 @@ body.theme-light ::-webkit-scrollbar-thumb:hover {
 /* ═══════════════════════════════════════════════
    LIQUID GLASS REVOLUTION — Fluid Ambient Orbs
    ═══════════════════════════════════════════════ */
-.liquid-ambient-canvas {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    width: 100vw;
-    height: 100vh;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: 1;
-    /* Static composited gradients keep the same liquid-glass depth without
-       animating four full-screen, heavily blurred layers on every frame. */
-    background:
-        radial-gradient(ellipse 56% 54% at 24% 0%, rgba(37, 99, 235, 0.58), transparent 72%),
-        radial-gradient(ellipse 62% 58% at 92% 88%, rgba(124, 58, 237, 0.5), transparent 72%),
-        radial-gradient(ellipse 46% 48% at 56% 45%, rgba(6, 182, 212, 0.4), transparent 75%),
-        radial-gradient(ellipse 44% 45% at 4% 84%, rgba(5, 150, 105, 0.3), transparent 75%);
-    opacity: 0.92;
-    transition: opacity 0.5s ease;
-}
+.liquid-ambient-canvas { display: none; }
 
-.liquid-glow-orb {
-    /* The elements remain in the DOM for theme compatibility, but the
-       composited canvas above replaces their expensive blur/filter work. */
-    display: none;
-}
+.liquid-glow-orb { display: none; }
 
 /* Entry-level devices retain the glass UI with smaller sampling regions. */
 body.low-spec {
-    --glass-surface-blur: 14px;
-    --glass-elevated-blur: 12px;
-    --glass-floating-blur: 16px;
-    --glass-interactive-blur: 8px;
+    --glass-surface-blur: 2px;
+    --glass-elevated-blur: 2px;
+    --glass-floating-blur: 2px;
+    --glass-interactive-blur: 2px;
     --glass-blur: 12px;
 }
 
@@ -344,11 +320,7 @@ body.low-spec {
 }
 
 /* Light Theme adjustments for ambient orbs */
-body.theme-light .liquid-glow-orb {
-    mix-blend-mode: normal;
-    opacity: 0.15;
-    filter: blur(100px);
-}
+body.theme-light .liquid-glow-orb { display: none; }
 body.theme-light .liquid-glow-orb.orb-primary {
     background: radial-gradient(circle, rgba(59, 130, 246, 0.5) 0%, transparent 70%);
 }
@@ -364,10 +336,7 @@ body.theme-light .liquid-glow-orb.orb-teal {
 
 /* Power Saver Mode: Pause orbs animations */
 body.power-saver .liquid-glow-orb,
-body.power-saving .liquid-glow-orb {
-    animation-play-state: paused !important;
-    opacity: 0.3 !important;
-}
+body.power-saving .liquid-glow-orb { display: none; }
 
 @keyframes liquid-drift-1 {
     0% { transform: translate(0, 0) scale(1) rotate(0deg); }
@@ -3830,9 +3799,7 @@ body.theme-light {
 }
 
 /* Hide the dark space ambient canvas and blur orbs completely in light mode */
-body.theme-light .liquid-ambient-canvas {
-    display: none !important;
-}
+body.theme-light .liquid-ambient-canvas { display: none; }
 
 /* Base containers all share the clean luminous canvas */
 body.theme-light .app-container,
@@ -4414,32 +4381,17 @@ body.theme-light .auth-divider::after {
 .settings-modern-container[dir="rtl"] .setting-item-desc { max-width: 620px; line-height: 1.65; }
 
 .settings-modern-container[dir="rtl"] .toggle-switch {
-    width: 94px;
+    width: 44px;
     height: 24px;
     direction: ltr;
 }
 
 .settings-modern-container[dir="rtl"] .toggle-slider {
     width: 44px;
-    left: auto;
+    left: 0;
     right: 0;
     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09);
 }
-
-.settings-modern-container[dir="rtl"] .toggle-switch::after {
-    content: attr(data-state);
-    position: absolute;
-    left: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--text-muted);
-    font-size: 11px;
-    font-weight: 700;
-    white-space: nowrap;
-    direction: rtl;
-}
-
-.settings-modern-container[dir="rtl"] .toggle-switch:has(input:checked)::after { color: var(--accent-primary); }
 
 .settings-modern-container[dir="rtl"] select.sort-select {
     direction: rtl;
@@ -4903,4 +4855,17 @@ body.theme-light .settings-modern-container[dir="rtl"] .setting-item-row:focus-w
 
 #admin-users-list-section .btn-icon:hover {
     background: rgba(255,255,255,0.1);
+}
+
+/* RTL toggle uses direction:ltr so standard +20px translateX applies */
+
+/* Fake settings implementation */
+body.power-saver * {
+    animation-play-state: paused !important;
+}
+body.reduce-hover * {
+    transition-duration: 0.05s !important;
+}
+body.compact-mode .downloads-list .download-card {
+    padding: 8px !important;
 }

@@ -207,7 +207,7 @@ def set_speed_limit(kbps: int):
 
 def get_speed_limit() -> int:
     return GLOBAL_SPEED_LIMIT_KBPS
-
+    
 def calculate_optimal_threads(total_size: int) -> int:
     if total_size <= 0:
         return 1
@@ -297,21 +297,46 @@ def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, qua
         
     return download_id
 
+
+# Global cache to prevent constant disk I/O on SQLite
+IN_MEMORY_DB_CACHE = {}
+
 def _update_db(ctx, **kwargs):
-    db = SessionLocal()
-    try:
-        rec = db.query(DownloadRecord).filter(DownloadRecord.id == ctx.id).first()
-        if rec:
-            for k, v in kwargs.items():
-                setattr(rec, k, v)
-            db.commit()
-    except Exception as e:
-        logger.error(f"Database update failed for {ctx.id}: {e}")
-    finally:
-        db.close()
-        
+    global IN_MEMORY_DB_CACHE
+    
+    # Always update memory cache immediately
+    if ctx.id not in IN_MEMORY_DB_CACHE:
+        IN_MEMORY_DB_CACHE[ctx.id] = {}
+    IN_MEMORY_DB_CACHE[ctx.id].update(kwargs)
+    
+    # Only commit to SQLite if status changed or it's a final state, or error
+    # Progress updates alone won't hammer the database
+    should_commit_to_db = False
+    if "status" in kwargs:
+        should_commit_to_db = True
+    elif "error_message" in kwargs and kwargs["error_message"]:
+        should_commit_to_db = True
+    elif "filename" in kwargs and "total_size" in kwargs:
+        should_commit_to_db = True
+
+    if should_commit_to_db:
+        db = SessionLocal()
+        try:
+            rec = db.query(DownloadRecord).filter(DownloadRecord.id == ctx.id).first()
+            if rec:
+                # Flush everything from cache to the real DB
+                for k, v in IN_MEMORY_DB_CACHE[ctx.id].items():
+                    setattr(rec, k, v)
+                db.commit()
+        except Exception as e:
+            logger.error(f"Database update failed for {ctx.id}: {e}")
+        finally:
+            db.close()
+            
+    # Trigger UI update callback via websocket
     if ctx.on_update:
         ctx.on_update(ctx.id)
+
 
 def _run_ytdlp(ctx: DownloadContext):
     logger.info(f"Queued yt-dlp download: {ctx.id}. Waiting for available slot...")
@@ -901,6 +926,7 @@ async def _run_chunked_download_async(ctx: DownloadContext):
             head_status = 0
             head_headers = {}
             final_url = ctx.url
+            last_error_msg = None
             
             try:
                 async with session.head(ctx.url, allow_redirects=True, headers=headers) as head_req:
@@ -908,6 +934,7 @@ async def _run_chunked_download_async(ctx: DownloadContext):
                     head_headers = head_req.headers
                     final_url = str(head_req.url)
             except Exception as e:
+                last_error_msg = str(e)
                 logger.warning(f"HEAD request failed for {ctx.id}: {e}")
             
             # If HEAD failed or returned 403/405, retry with GET range=0-0
@@ -919,6 +946,7 @@ async def _run_chunked_download_async(ctx: DownloadContext):
                         head_headers = get_req.headers
                         final_url = str(get_req.url)
                 except Exception as e:
+                    last_error_msg = str(e)
                     logger.warning(f"GET range request failed for {ctx.id}: {e}")
             
             # If still 403, retry with a referer header (some CDNs require it)
@@ -937,7 +965,10 @@ async def _run_chunked_download_async(ctx: DownloadContext):
                     pass
             
             if head_status not in (200, 206):
-                raise Exception(f"Server returned status {head_status}. The link may require login or cookies.")
+                if head_status == 0 and last_error_msg:
+                    raise Exception(f"Network error: {last_error_msg}")
+                else:
+                    raise Exception(f"Server returned status {head_status}. The link may require login or cookies.")
                 
             total_size = int(head_headers.get('Content-Length', 0))
             
