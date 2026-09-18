@@ -1,6 +1,6 @@
 {
   "name": "ledo-downloader",
-  "version": "3.9.2010",
+  "version": "3.9.2011",
   "description": "Ledo Downloader - High Speed Download Manager",
   "main": "main.js",
   "scripts": {
@@ -36,7 +36,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "frontend/icon.ico"
