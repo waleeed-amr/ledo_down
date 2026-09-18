@@ -23,6 +23,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sendMiniProgressResize: (height) => ipcRenderer.send('mini-progress-resize', height),
   writeClipboardText: (text) => clipboard.writeText(text),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  getVersion: () => ipcRenderer.invoke('get-app-version'),
+  // Auto-update controls
+  checkForUpdate: () => ipcRenderer.invoke('manual-check-update'),
+  installUpdate: () => ipcRenderer.send('install-update'),
+  onUpdateStatus: (callback) => ipcRenderer.on('update-status', (_event, data) => callback(data)),
   // Safe path & os wrappers
   pathExtname: (p) => path.extname(p),
   pathBasename: (p) => path.basename(p),

@@ -201,6 +201,7 @@
         // Listen to Inbox Messages
         listenToInbox: (callback) => {
             if (!auth.currentUser || auth.currentUser.isAnonymous) return null;
+            let receivedInitialSnapshot = false;
             return db.collection("users")
                 .doc(auth.currentUser.uid)
                 .collection("messages")
@@ -211,7 +212,11 @@
                         snapshot.forEach((doc) => {
                             messages.push({ id: doc.id, ...doc.data() });
                         });
-                        callback(messages);
+                        const addedMessages = receivedInitialSnapshot
+                            ? snapshot.docChanges().filter(change => change.type === 'added').map(change => ({ id: change.doc.id, ...change.doc.data() }))
+                            : [];
+                        callback(messages, addedMessages, !receivedInitialSnapshot);
+                        receivedInitialSnapshot = true;
                     },
                     (error) => {
                         console.error("Inbox listen error:", error);

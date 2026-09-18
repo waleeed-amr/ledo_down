@@ -25,6 +25,7 @@ venv/
 # --- Build outputs (Electron / mobile / PyInstaller) ---
 build/
 dist/
+dist 1/
 out/
 *.spec
 

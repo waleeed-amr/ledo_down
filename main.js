@@ -13,6 +13,13 @@ const { checkIntegrity } = require('./integrity_check.js');
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=160');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
+// ── Auto-Updater Configuration ──────────────────────────────────────────
+autoUpdater.autoDownload = true;        // تنزيل التحديث تلقائياً فور اكتشافه
+autoUpdater.allowDowngrade = false;     // عدم السماح بالتخفيض
+autoUpdater.autoInstallOnAppQuit = true; // تثبيت التحديث عند إغلاق التطبيق
+autoUpdater.logger = log;               // استخدام electron-log للتسجيل
+autoUpdater.logger.transports.file.level = 'info';
+
 // تهيئة الإعدادات
 const store = new Store();
 
@@ -390,6 +397,29 @@ function setupIpcHandlers() {
     return false;
   });
 
+  // App Version
+  ipcMain.handle('get-app-version', () => {
+    return app.getVersion();
+  });
+
+  // Manual Update Check (from renderer settings button)
+  ipcMain.handle('manual-check-update', async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return { success: true, version: result?.updateInfo?.version };
+    } catch (err) {
+      log.error('Manual check update error:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Install downloaded update
+  ipcMain.on('install-update', () => {
+    log.info('User requested update install. Quitting and installing...');
+    isQuiting = true;
+    autoUpdater.quitAndInstall(false, true);
+  });
+
   // Open External Links
   ipcMain.handle('open-external', async (_event, url) => {
     try {
@@ -622,6 +652,70 @@ app.whenReady().then(async () => {
   } catch (err) {
     log.warn('Auto updater error:', err);
   }
+
+  // ── Auto-Updater Events → Renderer ──────────────────────────────────────
+  autoUpdater.on('checking-for-update', () => {
+    log.info('Checking for update...');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-status', { status: 'checking' });
+    }
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    log.info('Update available:', info.version);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-status', {
+        status: 'available',
+        version: info.version,
+        releaseDate: info.releaseDate,
+        releaseNotes: info.releaseNotes
+      });
+    }
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    log.info('Update not available. Current is latest.');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-status', {
+        status: 'not-available',
+        version: info.version
+      });
+    }
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    log.info(`Update download: ${progress.percent.toFixed(1)}% @ ${(progress.bytesPerSecond / 1024).toFixed(0)} KB/s`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-status', {
+        status: 'downloading',
+        percent: progress.percent,
+        bytesPerSecond: progress.bytesPerSecond,
+        transferred: progress.transferred,
+        total: progress.total
+      });
+    }
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    log.info('Update downloaded:', info.version);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-status', {
+        status: 'downloaded',
+        version: info.version,
+        releaseNotes: info.releaseNotes
+      });
+    }
+  });
+
+  autoUpdater.on('error', (err) => {
+    log.error('Auto-updater error:', err);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-status', {
+        status: 'error',
+        message: err.message || 'Unknown error'
+      });
+    }
+  });
 
   setupTray();
 

@@ -2763,6 +2763,7 @@ body.power-saving .download-card {
     flex-direction: column;
     gap: 10px;
     padding-right: 4px;
+    max-height: 450px;
 }
 
 /* Form Select Elements / Dropdown Fix for UI */
@@ -4861,7 +4862,8 @@ body.theme-light .settings-modern-container[dir="rtl"] .setting-item-row:focus-w
 
 /* Fake settings implementation */
 body.power-saver * {
-    animation-play-state: paused !important;
+    animation-duration: 0.01s !important;
+    animation-iteration-count: 1 !important;
 }
 body.reduce-hover * {
     transition-duration: 0.05s !important;

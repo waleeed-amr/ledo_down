@@ -71,48 +71,71 @@
                 return;
             }
 
-            const snapshot = await window.firebaseApp.db.collection("announcements")
-                .where("active", "==", true)
+            let isInitial = true;
+            window.firebaseApp.db.collection("announcements")
                 .orderBy("created_at", "desc")
-                .limit(5)
-                .get();
+                .limit(10)
+                .onSnapshot((snapshot) => {
+                    const list = [];
+                    snapshot.forEach(doc => {
+                        const data = doc.data();
+                        if (data.active === true) {
+                            list.push({ id: doc.id, ...data });
+                        }
+                    });
 
-            const list = [];
-            snapshot.forEach(doc => {
-                list.push({ id: doc.id, ...doc.data() });
-            });
+                    const dismissed = JSON.parse(localStorage.getItem('ledo_dismissed_anns') || '[]');
+                    const now = new Date();
+                    const currentAppVersion = window.ledoAppVersion || "0.0.0";
+                    
+                    const activeList = list.filter(ann => {
+                        if (dismissed.includes(ann.id)) return false;
+                        if (ann.schedule_start && new Date(ann.schedule_start) > now) return false;
+                        if (ann.schedule_end && new Date(ann.schedule_end) < now) return false;
+                        if (ann.min_version) {
+                            const annParts = ann.min_version.split('.').map(Number);
+                            const appParts = currentAppVersion.split('.').map(Number);
+                            for (let i = 0; i < 3; i++) {
+                                const a = annParts[i] || 0;
+                                const b = appParts[i] || 0;
+                                if (b < a) return false; 
+                                if (b > a) break; 
+                            }
+                        }
+                        return true;
+                    });
 
-            // Filter out announcements the user already dismissed using localStorage
-            const now = new Date();
-            const currentAppVersion = window.ledoAppVersion || "0.0.0"; // Assume app injects this, or fallback
-            
-            const activeList = list.filter(ann => {
-                if (dismissed.includes(ann.id)) return false;
-                
-                // Check schedule
-                if (ann.schedule_start && new Date(ann.schedule_start) > now) return false;
-                if (ann.schedule_end && new Date(ann.schedule_end) < now) return false;
-                
-                // Check min version (if any)
-                // Note: simplistic version check assuming standard x.y.z
-                if (ann.min_version) {
-                    const annParts = ann.min_version.split('.').map(Number);
-                    const appParts = currentAppVersion.split('.').map(Number);
-                    for (let i = 0; i < 3; i++) {
-                        const a = annParts[i] || 0;
-                        const b = appParts[i] || 0;
-                        if (b < a) return false; // App version is older
-                        if (b > a) break; // App version is newer
+                    if (activeList.length > 0) {
+                        const newAnns = activeList.filter(a => !pendingAnnouncements.find(p => p.id === a.id) && (!currentAnnouncement || currentAnnouncement.id !== a.id));
+                        
+                        if (newAnns.length > 0) {
+                            pendingAnnouncements.push(...newAnns);
+
+                            if (!isInitial) {
+                                newAnns.forEach(ann => {
+                                    if (window.electronAPI && window.electronAPI.showNotification) {
+                                        window.electronAPI.showNotification(ann.title || 'إشعار للجميع', ann.body || '');
+                                    } else if (window.Notification && Notification.permission === 'granted') {
+                                        new Notification(ann.title || 'إشعار للجميع', { body: ann.body || '' });
+                                    }
+                                });
+                            }
+
+                            if (!currentAnnouncement) {
+                                showNextAnnouncement();
+                            } else {
+                                const countEl = document.getElementById('announcement-remaining');
+                                if (countEl && pendingAnnouncements.length > 0) {
+                                    countEl.textContent = `(متبقي ${pendingAnnouncements.length + 1} إشعارات)`;
+                                    countEl.style.display = 'inline';
+                                }
+                            }
+                        }
                     }
-                }
-                
-                return true;
-            });
-
-            if (activeList.length > 0) {
-                pendingAnnouncements = activeList;
-                showNextAnnouncement();
-            }
+                    isInitial = false;
+                }, (err) => {
+                    console.debug('Failed to fetch announcements:', err);
+                });
         } catch (err) {
             console.debug('Failed to fetch announcements from Firestore:', err);
         }
@@ -231,81 +254,182 @@
         }
     }
 
-    // ─── 3. App Update System (MediaFire / External Download) ─────────────────
+    // ─── 3. App Update System (GitHub Releases via electron-updater) ───────────
     async function checkForAppUpdates(manual = false) {
         const checkBtn = document.getElementById('btn-manual-check-update');
-        if (manual && checkBtn) {
-            checkBtn.disabled = true;
-            checkBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> جارِ الفحص...';
-            if (window.lucide) window.lucide.createIcons();
+        const statusEl = document.getElementById('update-check-status');
+
+        if (manual) {
+            // Use electron-updater for manual checks (GitHub Releases)
+            if (window.electronAPI && window.electronAPI.checkForUpdate) {
+                if (checkBtn) {
+                    checkBtn.disabled = true;
+                    checkBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> جارِ الفحص...';
+                    if (window.lucide) window.lucide.createIcons();
+                }
+                try {
+                    await window.electronAPI.checkForUpdate();
+                    // Results will come through onUpdateStatus listener
+                } catch (err) {
+                    console.debug('Manual check update error:', err);
+                    if (statusEl) statusEl.textContent = 'تعذر الاتصال بخادم التحديثات';
+                    if (checkBtn) {
+                        checkBtn.disabled = false;
+                        checkBtn.innerHTML = '<i data-lucide="refresh-cw"></i> التحقق من التحديثات';
+                        if (window.lucide) window.lucide.createIcons();
+                    }
+                }
+                return;
+            }
         }
 
+        // Firebase realtime listener for update-type announcements (fallback / supplementary)
         try {
-            if (!window.firebaseApp || !window.firebaseApp.db) {
-                throw new Error("Firebase not ready");
-            }
+            if (!window.firebaseApp || !window.firebaseApp.db) return;
             
-            const docRef = await window.firebaseApp.db.collection('app_config').doc('latest_update').get();
-            if (docRef.exists) {
-                const data = docRef.data();
-                // Compare versions. For simplicity, just show if available.
-                // In a real app, compare 'data.version' with 'app.getVersion()'
-                
-                // You can get current version from electronAPI if available
-                let currentVer = '3.9.0';
-                if (window.electronAPI && window.electronAPI.getVersion) {
-                    try { currentVer = await window.electronAPI.getVersion(); } catch(e){}
-                }
-                
-                // Basic check if versions differ
-                if (data.version && data.version !== currentVer && data.version !== 'v' + currentVer) {
-                    showUpdateModal({
-                        available: true,
-                        version: data.version,
-                        current_version: currentVer,
-                        download_url: data.download_url,
-                        changelog: data.changelog,
-                        required: data.required
+            if (!window.unsubscribeUpdates) {
+                window.unsubscribeUpdates = window.firebaseApp.db.collection('app_config').doc('latest_update')
+                    .onSnapshot(async (docRef) => {
+                        if (docRef.exists) {
+                            const data = docRef.data();
+                            let currentVer = '3.9.0';
+                            if (window.electronAPI && window.electronAPI.getVersion) {
+                                try { currentVer = await window.electronAPI.getVersion(); } catch(e){}
+                            }
+                            
+                            if (data.version && data.version !== currentVer && data.version !== 'v' + currentVer) {
+                                showUpdateModal({
+                                    available: true,
+                                    version: data.version,
+                                    current_version: currentVer,
+                                    download_url: data.download_url,
+                                    changelog: data.changelog,
+                                    required: data.required
+                                });
+                            }
+                        }
+                    }, (err) => {
+                        console.debug('Check update listener error:', err);
                     });
-                } else if (manual) {
+            }
+        } catch (err) {
+            console.debug('Firebase update check error:', err);
+        }
+    }
+
+    // ─── electron-updater UI handler (listens for update-status from main) ───
+    function setupElectronUpdaterUI() {
+        if (!window.electronAPI || !window.electronAPI.onUpdateStatus) return;
+
+        window.electronAPI.onUpdateStatus((data) => {
+            const checkBtn = document.getElementById('btn-manual-check-update');
+            const statusEl = document.getElementById('update-check-status');
+            const progressContainer = document.getElementById('update-progress-container');
+            const progressBar = document.getElementById('update-progress-bar');
+            const progressText = document.getElementById('update-progress-text');
+            const installBtn = document.getElementById('btn-install-update');
+
+            switch (data.status) {
+                case 'checking':
+                    if (statusEl) statusEl.textContent = 'جارِ التحقق من التحديثات...';
+                    if (checkBtn) {
+                        checkBtn.disabled = true;
+                        checkBtn.innerHTML = '<i data-lucide="loader-2" class="spin"></i> جارِ الفحص...';
+                    }
+                    if (installBtn) installBtn.style.display = 'none';
+                    break;
+
+                case 'available':
+                    if (statusEl) {
+                        statusEl.textContent = '🎉 تحديث جديد متوفر: v' + data.version;
+                        statusEl.style.color = '#818cf8';
+                    }
+                    if (checkBtn) {
+                        checkBtn.disabled = true;
+                        checkBtn.innerHTML = '<i data-lucide="download"></i> جارِ التحميل...';
+                    }
+                    if (progressContainer) progressContainer.style.display = 'block';
+                    break;
+
+                case 'downloading':
+                    if (progressBar) progressBar.style.width = data.percent.toFixed(1) + '%';
+                    var speed = data.bytesPerSecond > 1048576
+                        ? (data.bytesPerSecond / 1048576).toFixed(1) + ' MB/s'
+                        : (data.bytesPerSecond / 1024).toFixed(0) + ' KB/s';
+                    var downloaded = (data.transferred / 1048576).toFixed(1);
+                    var total = (data.total / 1048576).toFixed(1);
+                    if (progressText) {
+                        progressText.textContent = data.percent.toFixed(0) + '% — ' + downloaded + '/' + total + ' MB (' + speed + ')';
+                    }
+                    if (statusEl) statusEl.textContent = 'جارِ تحميل التحديث... ' + data.percent.toFixed(0) + '%';
+                    break;
+
+                case 'downloaded':
+                    if (statusEl) {
+                        statusEl.textContent = '✅ تم تحميل التحديث v' + data.version + ' — جاهز للتثبيت!';
+                        statusEl.style.color = '#10b981';
+                    }
+                    if (progressContainer) progressContainer.style.display = 'none';
+                    if (checkBtn) {
+                        checkBtn.disabled = false;
+                        checkBtn.innerHTML = '<i data-lucide="refresh-cw"></i> التحقق من التحديثات';
+                    }
+                    if (installBtn) {
+                        installBtn.style.display = 'inline-flex';
+                        installBtn.onclick = function() {
+                            if (window.electronAPI && window.electronAPI.installUpdate) {
+                                window.electronAPI.installUpdate();
+                            }
+                        };
+                    }
                     if (window.Toastify) {
                         window.Toastify({
-                            text: '✨ أنت تستخدم أحدث إصدار بالفعل!',
-                            duration: 3500,
+                            text: '🚀 تم تحميل التحديث v' + data.version + '! اضغط "تثبيت الآن" لتحديث البرنامج.',
+                            duration: 8000,
                             gravity: 'top',
                             position: 'center',
                             style: {
-                                background: 'linear-gradient(135deg, #10b981, #059669)',
+                                background: 'linear-gradient(135deg, #6366f1, #4f46e5)',
                                 borderRadius: '10px',
                                 fontWeight: '600'
                             }
                         }).showToast();
                     }
-                }
-            } else if (manual) {
-                throw new Error("No update info");
-            }
-        } catch (err) {
-            console.debug('Check update error:', err);
-            if (manual && window.Toastify) {
-                window.Toastify({
-                    text: 'تعذر الاتصال بخادم التحديثات حالياً',
-                    duration: 3000,
-                    gravity: 'top',
-                    position: 'center',
-                    style: {
-                        background: 'linear-gradient(135deg, #ef4444, #b91c1c)',
-                        borderRadius: '10px'
+                    break;
+
+                case 'not-available':
+                    if (statusEl) {
+                        statusEl.textContent = '✨ أنت تستخدم أحدث إصدار!';
+                        statusEl.style.color = '#10b981';
                     }
-                }).showToast();
+                    if (checkBtn) {
+                        checkBtn.disabled = false;
+                        checkBtn.innerHTML = '<i data-lucide="refresh-cw"></i> التحقق من التحديثات';
+                    }
+                    if (progressContainer) progressContainer.style.display = 'none';
+                    setTimeout(function() {
+                        if (statusEl && statusEl.textContent.indexOf('أحدث إصدار') !== -1) {
+                            statusEl.textContent = '';
+                        }
+                    }, 5000);
+                    break;
+
+                case 'error':
+                    if (statusEl) {
+                        statusEl.textContent = 'تعذر التحقق من التحديثات حالياً';
+                        statusEl.style.color = '#ef4444';
+                    }
+                    if (checkBtn) {
+                        checkBtn.disabled = false;
+                        checkBtn.innerHTML = '<i data-lucide="refresh-cw"></i> إعادة المحاولة';
+                    }
+                    if (progressContainer) progressContainer.style.display = 'none';
+                    console.debug('Update error:', data.message);
+                    break;
             }
-        } finally {
-            if (manual && checkBtn) {
-                checkBtn.disabled = false;
-                checkBtn.innerHTML = '<i data-lucide="refresh-cw"></i> التحقق من التحديثات';
-                if (window.lucide) window.lucide.createIcons();
-            }
-        }
+
+            if (window.lucide) window.lucide.createIcons();
+        });
     }
 
     function showUpdateModal(updateData) {
@@ -477,6 +601,7 @@
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
             initUI();
+            setupElectronUpdaterUI();
             // Slight delay so the UI finishes painting before modals pop
             setTimeout(() => {
                 fetchAndShowAnnouncements();
@@ -486,6 +611,7 @@
         });
     } else {
         initUI();
+        setupElectronUpdaterUI();
         setTimeout(() => {
             fetchAndShowAnnouncements();
             checkForAppUpdates(false);

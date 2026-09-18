@@ -25,6 +25,12 @@
     "appId": "com.ledo.downloader",
     "compression": "normal",
     "productName": "Ledo Downloader",
+    "publish": {
+      "provider": "github",
+      "owner": "waleeed-amr",
+      "repo": "ledo_down",
+      "releaseType": "release"
+    },
     "icon": "frontend/icon.ico",
     "win": {
       "target": [
@@ -46,7 +52,8 @@
       "installerIcon": "frontend/icon.ico",
       "uninstallerIcon": "frontend/icon.ico",
       "deleteAppDataOnUninstall": false,
-      "runAfterFinish": true
+      "runAfterFinish": true,
+      "differentialPackage": true
     },
     "directories": {
       "output": "dist"

@@ -1,4 +1,4 @@
-﻿const API_URL = 'http://127.0.0.1:8000/api';
+const API_URL = 'http://127.0.0.1:8000/api';
 const WS_URL = 'ws://127.0.0.1:8000/ws';
 
 // Global Error Handlers for Crash Reporting
@@ -2191,7 +2191,36 @@ function initFirebaseAuth() {
 
             // Listen to Inbox
             if (unsubscribeInbox) unsubscribeInbox();
-            unsubscribeInbox = firebaseApp.listenToInbox((messages) => {
+            unsubscribeInbox = firebaseApp.listenToInbox((messages, addedMessages, isInitial) => {
+                if (!isInitial && addedMessages && addedMessages.length > 0) {
+                    addedMessages.forEach(msg => {
+                        const title = msg.title || 'رسالة من الإدارة';
+                        const body = msg.body || msg.text || msg.message || '';
+                        
+                        // Native OS Notification
+                        if (window.electronAPI && window.electronAPI.showNotification) {
+                            window.electronAPI.showNotification(title, body);
+                        } else if (window.Notification && Notification.permission === 'granted') {
+                            new Notification(title, { body: body });
+                        }
+
+                        // In-app Toast Notification
+                        if (typeof showToast === 'function') {
+                            showToast(title, '#6366f1');
+                        } else if (window.Toastify) {
+                            window.Toastify({
+                                text: title,
+                                duration: 5000,
+                                gravity: 'top',
+                                position: 'center',
+                                style: {
+                                    background: 'linear-gradient(135deg, #6366f1, #4f46e5)',
+                                    borderRadius: '10px'
+                                }
+                            }).showToast();
+                        }
+                    });
+                }
                 const inboxContainer = document.getElementById('inbox-messages');
                 const emptyMsg = document.getElementById('inbox-empty');
                 if (!inboxContainer) return;
@@ -2213,8 +2242,8 @@ function initFirebaseAuth() {
                         const div = document.createElement('div');
                         div.style = "background: rgba(99, 102, 241, 0.1); border-right: 3px solid #6366f1; padding: 10px; border-radius: 6px; font-size: 13px;";
                         div.innerHTML = `
-                            <div style="color: #6366f1; font-weight: bold; margin-bottom: 4px;">الادارة:</div>
-                            <div style="color: var(--text-main);">${msg.text || msg.message}</div>
+                            <div style="color: #6366f1; font-weight: bold; margin-bottom: 4px;">${msg.title || 'الادارة:'}</div>
+                            <div style="color: var(--text-main);">${msg.body || msg.text || msg.message || ''}</div>
                             <div style="color: var(--text-muted); font-size: 10px; margin-top: 4px; text-align: left;">${dateStr}</div>
                         `;
                         inboxContainer.appendChild(div);
