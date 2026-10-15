@@ -1,14 +1,16 @@
 import asyncio
 import psutil
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, BackgroundTasks, concurrency
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, BackgroundTasks, concurrency, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
-from typing import Optional, List
+from typing import Any, Dict, List, Optional
 import uvicorn
 import os
 import sys
 import time
+import re
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 # FIX for [Errno 22] Invalid argument in PyInstaller --noconsole mode
 # When running without a console, standard streams are None. This causes
@@ -28,32 +30,44 @@ import orjson
 from loguru import logger
 from sqlalchemy.orm import Session
 
+try:
+    from spotify_resolver import is_spotify_url, resolve_spotify
+except ImportError:
+    logger.warning("spotify_resolver module not found - Spotify support disabled")
+    def is_spotify_url(url): return False
+    def resolve_spotify(url): return None
 from database import get_db, DownloadRecord, SessionLocal
 from downloader import (
     start_download, active_downloads, get_category_dir, BASE_DOWNLOAD_DIR, IN_MEMORY_DB_CACHE,
     set_speed_limit, get_speed_limit, set_max_concurrent, get_max_concurrent,
-    set_auto_categorize, set_base_download_dir
+    set_auto_categorize, set_base_download_dir, get_smart_referer, pick_best_youtube_match
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi.responses import FileResponse
 from datetime import datetime
 import os
+import secrets
+import threading
+import uuid
 
 scheduler = AsyncIOScheduler()
 
 # Configure Loguru for robust error tracking and stability monitoring
 logger.remove()
 logger.add(sys.stdout, format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>")
-# File logging enabled to help debug "paralyzed" app issues
-logger.add("ledo_backend.log", rotation="10 MB", retention="10 days", level="INFO")
+# File logging - write to AppData to avoid PermissionError in Program Files
+_log_dir = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Ledo Downloader")
+os.makedirs(_log_dir, exist_ok=True)
+logger.add(os.path.join(_log_dir, "ledo_backend.log"), rotation="10 MB", retention="10 days", level="INFO")
 
 app = FastAPI(title="Ledo Downloader API - Core")
 app_loop = None
+app.state.spotify_batch_tasks = set()
 
 # CORS middleware - restricted to prevent malicious websites from accessing the local API
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex="^null$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=r"^null$|^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -90,6 +104,25 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+def normalize_youtube_watch_url(url: str) -> str:
+    """Drop YouTube playlist/radio parameters when a single watch video is requested."""
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if host == "youtu.be":
+            video_id = parts.path.strip("/").split("/", 1)[0]
+        elif host == "youtube.com" or host.endswith(".youtube.com"):
+            if parts.path != "/watch":
+                return url
+            video_id = parse_qs(parts.query).get("v", [""])[0]
+        else:
+            return url
+        if not video_id:
+            return url
+        return urlunsplit(("https", "www.youtube.com", "/watch", urlencode({"v": video_id}), ""))
+    except (TypeError, ValueError):
+        return url
+
 class DownloadRequest(BaseModel):
     url: str
     is_yt_dlp: Optional[bool] = None
@@ -97,20 +130,118 @@ class DownloadRequest(BaseModel):
     quality: Optional[str] = "best"
     title: Optional[str] = None
     cookies: Optional[str] = None
+    cookies_netscape: Optional[str] = None
+    cookie_jar: Optional[List[Dict[str, Any]]] = None
+    headers: Optional[Dict[str, str]] = None
     user_agent: Optional[str] = None
     referer: Optional[str] = None
+    selected_track_indices: Optional[List[int]] = None
+    spotify_tracks: Optional[List[Dict[str, Any]]] = None
 
 class InfoRequest(BaseModel):
     url: str
+    cookies: Optional[str] = None
+    cookies_netscape: Optional[str] = None
+    cookie_jar: Optional[List[Dict[str, Any]]] = None
+    headers: Optional[Dict[str, str]] = None
+    user_agent: Optional[str] = None
+    referer: Optional[str] = None
+
+class YouTubeAudioSessionRequest(BaseModel):
+    url: str
+    cookies: Optional[str] = None
+    cookies_netscape: Optional[str] = None
+    user_agent: Optional[str] = None
+
+_youtube_audio_sessions = {}
+_youtube_audio_sessions_lock = threading.Lock()
+_youtube_audio_extract_limit = asyncio.Semaphore(2)
+_YOUTUBE_AUDIO_SESSION_TTL = 60 * 60
+_YOUTUBE_AUDIO_MAX_SESSIONS = 256
+
+def _extract_youtube_audio(url: str, cookies: Optional[str] = None, user_agent: Optional[str] = None):
+    import yt_dlp
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "skip_download": True,
+        "socket_timeout": 20,
+        "cachedir": False,
+        "remote_components": ["ejs:github"],
+        "extractor_args": {"youtube": ["player_client=web_safari,web_embedded,-tv_downgraded", "player_skip=configs"]},
+    }
+    media_headers = {}
+    if cookies:
+        media_headers["Cookie"] = cookies
+    if user_agent:
+        media_headers["User-Agent"] = user_agent
+    if media_headers:
+        options["http_headers"] = media_headers
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if not info:
+        raise ValueError("YouTube did not return media information")
+    audio_formats = [
+        media_format for media_format in info.get("formats", [])
+        if media_format.get("url")
+        and media_format.get("protocol") in ("http", "https")
+        and media_format.get("acodec") not in (None, "none")
+        and media_format.get("vcodec") in (None, "none")
+    ]
+    if not audio_formats:
+        raise ValueError("No audio-only format is available")
+    with yt_dlp.YoutubeDL(options) as ydl:
+        sortable_info = {
+            "formats": audio_formats,
+            "_format_sort_fields": info.get("_format_sort_fields"),
+        }
+        ydl.sort_formats(sortable_info)
+        audio_formats = sortable_info["formats"]
+    fmt = audio_formats[-1]
+    if not fmt.get("url") or fmt.get("vcodec") not in (None, "none"):
+        raise ValueError("Could not resolve an audio-only YouTube stream")
+    # yt-dlp may suffix an itag (for example "140-drc"), while the actual
+    # YouTube videoplayback URL still carries the numeric itag in its query.
+    video_itags = sorted({
+        match.group(1)
+        for media_format in info.get("formats", [])
+        if media_format.get("vcodec") not in (None, "none")
+        if (match := re.match(r"^(\d+)", str(media_format.get("format_id", ""))))
+    })
+    return {
+        "url": fmt["url"],
+        "title": info.get("title") or "YouTube audio",
+        "duration": info.get("duration"),
+        "thumbnail": info.get("thumbnail"),
+        "ext": fmt.get("ext"),
+        "format_id": fmt.get("format_id"),
+        "audio_bitrate_kbps": fmt.get("tbr"),
+        "video_itags": video_itags,
+        "created_at": time.time(),
+    }
 
 class QuickAddRequest(BaseModel):
     url: str
     cookies: Optional[str] = None
+    cookies_netscape: Optional[str] = None
+    cookie_jar: Optional[List[Dict[str, Any]]] = None
+    headers: Optional[Dict[str, str]] = None
     user_agent: Optional[str] = None
     referer: Optional[str] = None
     filename: Optional[str] = None
     file_size: Optional[int] = None
     mime_type: Optional[str] = None
+
+class UpdateUrlRequest(BaseModel):
+    id: str
+    new_url: str
+    cookies: Optional[str] = None
+    cookies_netscape: Optional[str] = None
+    cookie_jar: Optional[List[Dict[str, Any]]] = None
+    headers: Optional[Dict[str, str]] = None
+    user_agent: Optional[str] = None
+    referer: Optional[str] = None
 
 class SettingsUpdateRequest(BaseModel):
     speed_limit_kbps: Optional[int] = None
@@ -149,6 +280,7 @@ async def resolve_short_url(url: str) -> str:
 
 async def check_is_direct_file(url: str, cookies: str = None, user_agent: str = None, referer: str = None) -> dict:
     try:
+        referer = get_smart_referer(url, referer)
         default_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
         headers = {
             'User-Agent': user_agent or default_ua,
@@ -158,10 +290,22 @@ async def check_is_direct_file(url: str, cookies: str = None, user_agent: str = 
             headers['Referer'] = referer
         if cookies:
             headers['Cookie'] = cookies
-        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as client:
             resp = await client.head(url, headers=headers)
             if resp.status_code not in (200, 206):
                 resp = await client.get(url, headers={"Range": "bytes=0-0", **headers})
+            
+            # If 403 or 404, retry with smart referer candidate if available
+            if resp.status_code in (403, 404):
+                smart_ref = get_smart_referer(url)
+                if smart_ref and smart_ref != headers.get('Referer'):
+                    retry_headers = {**headers, 'Referer': smart_ref, 'Range': 'bytes=0-0'}
+                    try:
+                        retry_resp = await client.get(url, headers=retry_headers)
+                        if retry_resp.status_code in (200, 206):
+                            resp = retry_resp
+                    except Exception:
+                        pass
                 
             if resp.status_code in (200, 206):
                 content_type = resp.headers.get('content-type', '').lower()
@@ -224,6 +368,7 @@ async def trigger_quick_add(req: QuickAddRequest):
     if not req.url:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="URL is required")
+    req.url = normalize_youtube_watch_url(req.url)
     import urllib.parse
     parsed = urllib.parse.urlparse(req.url)
     if not parsed.scheme or not parsed.netloc:
@@ -235,6 +380,9 @@ async def trigger_quick_add(req: QuickAddRequest):
         "type": "open_quick_add",
         "url": req.url,
         "cookies": req.cookies,
+        "cookies_netscape": req.cookies_netscape,
+        "cookie_jar": req.cookie_jar,
+        "headers": req.headers,
         "user_agent": req.user_agent,
         "referer": req.referer,
         "filename": req.filename,
@@ -246,15 +394,30 @@ async def trigger_quick_add(req: QuickAddRequest):
 
 @app.post("/api/sniff")
 async def sniff_url(req: InfoRequest):
+    req.url = normalize_youtube_watch_url(req.url)
     req.url = await resolve_short_url(req.url)
-    # Try direct file first
-    direct_info = await check_is_direct_file(req.url)
-    if direct_info.get("is_direct"):
-        return {
-            "title": direct_info.get("title", ""),
-            "size": direct_info.get("size", 0),
-            "type": "file"
-        }
+    # Streaming sites such as YouTube can take several seconds to answer a
+    # HEAD request and never behave like a downloadable file. Skip that probe
+    # so it cannot consume most of the metadata lookup's time budget.
+    from urllib.parse import urlparse
+    host = (urlparse(req.url).hostname or "").lower()
+    streaming_hosts = (
+        "youtube.com", "youtu.be", "tiktok.com", "instagram.com",
+        "facebook.com", "fb.watch", "twitter.com", "x.com", "twitch.tv",
+        "vimeo.com", "dailymotion.com", "soundcloud.com", "reddit.com"
+    )
+    is_streaming = any(host == domain or host.endswith("." + domain) for domain in streaming_hosts)
+
+    if not is_streaming:
+        direct_info = await check_is_direct_file(
+            req.url, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer
+        )
+        if direct_info.get("is_direct"):
+            return {
+                "title": direct_info.get("title", ""),
+                "size": direct_info.get("size", 0),
+                "type": "file"
+            }
     
     # Try yt-dlp if it's a media site
     try:
@@ -266,8 +429,20 @@ async def sniff_url(req: InfoRequest):
             'dump_single_json': True,
             'default_search': 'auto',
             'playlist_items': '1',
-            'cookiefile': None
+            'socket_timeout': 10,
+            'cookiefile': None,
+            'remote_components': ['ejs:github'],
+            'extractor_args': {'youtube': ['player_client=web_safari,web_embedded,-tv_downgraded', 'player_skip=configs']}
         }
+        sniff_headers = {}
+        if req.user_agent:
+            sniff_headers['User-Agent'] = req.user_agent
+        if req.cookies:
+            sniff_headers['Cookie'] = req.cookies
+        if req.referer:
+            sniff_headers['Referer'] = req.referer
+        if sniff_headers:
+            ydl_opts['http_headers'] = sniff_headers
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = await asyncio.to_thread(ydl.extract_info, req.url, download=False)
             if info:
@@ -313,10 +488,269 @@ async def sniff_url(req: InfoRequest):
         
     return {"title": "Unknown File", "size": 0, "type": "unknown"}
 
+@app.post("/api/youtube/audio-session")
+async def create_youtube_audio_session(req: YouTubeAudioSessionRequest):
+    from urllib.parse import urlparse
+    parsed = urlparse(req.url)
+    allowed_hosts = {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be", "www.youtube-nocookie.com"}
+    if (
+        len(req.url) > 4096
+        or len(req.cookies or "") > 16_384
+        or len(req.user_agent or "") > 1024
+        or "\r" in (req.cookies or "")
+        or "\n" in (req.cookies or "")
+        or parsed.username
+        or parsed.password
+        or parsed.scheme != "https"
+        or (parsed.hostname or "").lower() not in allowed_hosts
+    ):
+        raise HTTPException(status_code=400, detail="Only YouTube video URLs are supported")
+    try:
+        async with _youtube_audio_extract_limit:
+            resolved = await asyncio.to_thread(_extract_youtube_audio, req.url, req.cookies, req.user_agent)
+    except Exception as exc:
+        logger.warning(f"YouTube audio session extraction failed: {exc}")
+        raise HTTPException(status_code=502, detail="Could not resolve an audio-only stream. This video may be unavailable or restricted.")
+    session_id = secrets.token_urlsafe(24)
+    with _youtube_audio_sessions_lock:
+        now = time.time()
+        for key in [key for key, value in _youtube_audio_sessions.items() if now - value["created_at"] > _YOUTUBE_AUDIO_SESSION_TTL]:
+            _youtube_audio_sessions.pop(key, None)
+        if len(_youtube_audio_sessions) >= _YOUTUBE_AUDIO_MAX_SESSIONS:
+            raise HTTPException(status_code=429, detail="Too many active audio sessions. Close an existing session and retry.")
+        # The browser receives the signed stream URL directly. Keep no copy of
+        # that credential-like URL in backend memory after constructing response.
+        _youtube_audio_sessions[session_id] = {"created_at": now}
+    return {
+        "session_id": session_id,
+        "title": resolved["title"],
+        "duration": resolved["duration"],
+        "thumbnail": resolved["thumbnail"],
+        "stream_url": resolved["url"],
+        "format_id": resolved["format_id"],
+        "audio_bitrate_kbps": resolved["audio_bitrate_kbps"],
+        "video_itags": resolved["video_itags"],
+    }
+
+@app.delete("/api/youtube/audio-session/{session_id}")
+async def close_youtube_audio_session(session_id: str):
+    with _youtube_audio_sessions_lock:
+        _youtube_audio_sessions.pop(session_id, None)
+    return {"status": "closed"}
+
 @app.post("/api/download")
 async def add_download(req: DownloadRequest, db: Session = Depends(get_db)):
+    req.url = normalize_youtube_watch_url(req.url)
     logger.info(f"Received download request for URL: {req.url}")
     
+    if is_spotify_url(req.url):
+        supplied_tracks = []
+        for raw_track in req.spotify_tracks or []:
+            if not isinstance(raw_track, dict):
+                continue
+            title = str(raw_track.get("title") or "").strip()
+            artist = str(raw_track.get("artist") or "").strip()
+            if not title:
+                continue
+            track = {"title": title, "artist": artist}
+            album = str(raw_track.get("album") or "").strip()
+            if album:
+                track["album"] = album
+            duration = raw_track.get("duration")
+            if isinstance(duration, (int, float)) and duration > 0:
+                track["duration"] = float(duration)
+            supplied_tracks.append(track)
+
+        res = (
+            {"type": "spotify", "tracks": supplied_tracks}
+            if supplied_tracks else await asyncio.to_thread(resolve_spotify, req.url)
+        )
+        if res and res.get("tracks"):
+            # Enqueue every resolved Spotify item (playlist, album, or artist top tracks).
+            def broadcast_update(dl_id):
+                if app_loop and not app_loop.is_closed():
+                    try:
+                        asyncio.run_coroutine_threadsafe(broadcast_downloads(), app_loop)
+                    except Exception: pass
+                    
+            tracks = res["tracks"]
+            if req.selected_track_indices is not None:
+                selected_indices = list(dict.fromkeys(req.selected_track_indices))
+                if not selected_indices or any(index < 0 or index >= len(tracks) for index in selected_indices):
+                    return {
+                        "status": "error",
+                        "message": "اختار أغنية واحدة على الأقل من القائمة.",
+                    }
+                tracks = [tracks[index] for index in selected_indices]
+
+            pending_tracks = []
+            now_ms = time.time() * 1000
+            for track in tracks:
+                artist = track.get('artist', '')
+                title = track.get('title', '')
+                display_title = f"{artist} - {title}" if artist else title
+                pending_id = str(uuid.uuid4())
+                db.add(DownloadRecord(
+                    id=pending_id,
+                    url=req.url,
+                    filename=display_title,
+                    status="resolving",
+                    progress=5.0,
+                    speed=0.0,
+                    total_size=0.0,
+                    downloaded=0.0,
+                    is_yt_dlp=True,
+                    error_message="",
+                    created_at=now_ms,
+                    save_path=req.save_path,
+                    quality="audio",
+                    cookies=req.cookies,
+                    user_agent=req.user_agent,
+                    referer=req.referer,
+                ))
+                IN_MEMORY_DB_CACHE[pending_id] = {"status": "resolving", "progress": 5.0, "speed": 0}
+                pending_tracks.append((pending_id, track, display_title))
+            db.commit()
+            # Show each selected song in the downloads list while YouTube matches are being resolved.
+            await broadcast_downloads()
+
+            matched_youtube_urls = set()
+            match_semaphore = asyncio.Semaphore(3)
+
+            async def resolve_spotify_track(pending_id, track, display_title):
+                artist = track.get('artist', '')
+                title  = track.get('title', '')
+                worker_db = SessionLocal()
+
+                def report_match_progress(progress, _attempt, _total):
+                    cache = IN_MEMORY_DB_CACHE.setdefault(pending_id, {})
+                    if cache.get("status") not in ("error", "completed"):
+                        cache.update(status="resolving", progress=progress, speed=0)
+                        broadcast_update(pending_id)
+
+                try:
+                    # Search off the request path so Spotify lists are accepted
+                    # immediately and never hold FastAPI's request DB session.
+                    async with match_semaphore:
+                        matched_url = await asyncio.to_thread(
+                            pick_best_youtube_match,
+                            title,
+                            artist,
+                            6,
+                            track.get('duration'),
+                            track.get('album', ''),
+                            report_match_progress,
+                        )
+                    record = worker_db.query(DownloadRecord).filter(DownloadRecord.id == pending_id).first()
+                    if not record:
+                        IN_MEMORY_DB_CACHE.pop(pending_id, None)
+                        return
+                    if not matched_url:
+                        reason = "لم يتم العثور على نسخة مطابقة بدرجة كافية"
+                        record.status = "error"
+                        record.progress = 0
+                        record.error_message = reason
+                        IN_MEMORY_DB_CACHE.setdefault(pending_id, {}).update(
+                            status="error", error_message=reason, resolving=False, progress=0, speed=0
+                        )
+                        worker_db.commit()
+                        logger.warning(f"No confident YouTube match for Spotify track '{display_title}'")
+                        return
+                    if matched_url in matched_youtube_urls:
+                        reason = "تم تخطيها لأن نتيجة YouTube نفسها اختيرت لأغنية أخرى في القائمة"
+                        record.status = "error"
+                        record.progress = 0
+                        record.error_message = reason
+                        IN_MEMORY_DB_CACHE.setdefault(pending_id, {}).update(
+                            status="error", error_message=reason, resolving=False, progress=0, speed=0
+                        )
+                        worker_db.commit()
+                        logger.warning(f"Skipping duplicate Spotify match for '{display_title}': {matched_url}")
+                        return
+
+                    # This coroutine runs on the event loop; no await occurs
+                    # between checking and reserving the URL, so duplicates
+                    # from parallel track searches cannot race each other.
+                    matched_youtube_urls.add(matched_url)
+                    record.progress = 0
+                    record.downloaded = 0
+                    record.total_size = 0
+                    record.speed = 0
+                    worker_db.commit()
+                    IN_MEMORY_DB_CACHE.setdefault(pending_id, {}).update(
+                        progress=0, downloaded=0, total_size=0, speed=0
+                    )
+                    IN_MEMORY_DB_CACHE.setdefault(pending_id, {}).pop("resolving", None)
+                    dl_id = start_download(
+                        matched_url, worker_db,
+                        use_ytdlp=True,
+                        on_update=broadcast_update,
+                        save_path=req.save_path,
+                        quality="audio",
+                        cookies=req.cookies,
+                        user_agent=req.user_agent,
+                        referer=req.referer,
+                        existing_id=pending_id,
+                        title=display_title
+                    )
+                    logger.info(f"Spotify match ready for '{display_title}' ({dl_id})")
+                except Exception as exc:
+                    logger.exception(f"Spotify track resolution failed for '{display_title}': {exc}")
+                    try:
+                        failed_record = worker_db.query(DownloadRecord).filter(DownloadRecord.id == pending_id).first()
+                        if failed_record:
+                            reason = f"تعذر تجهيز التنزيل: {exc}"
+                            failed_record.status = "error"
+                            failed_record.progress = 0
+                            failed_record.error_message = reason
+                            IN_MEMORY_DB_CACHE.setdefault(pending_id, {}).update(
+                                status="error", error_message=reason, resolving=False, progress=0, speed=0
+                            )
+                            worker_db.commit()
+                        else:
+                            IN_MEMORY_DB_CACHE.pop(pending_id, None)
+                    except Exception:
+                        logger.exception(f"Could not persist Spotify resolution failure for {pending_id}")
+                finally:
+                    worker_db.close()
+                    await broadcast_downloads()
+
+            async def resolve_spotify_batch():
+                outcomes = await asyncio.gather(*(
+                    resolve_spotify_track(pending_id, track, display_title)
+                    for pending_id, track, display_title in pending_tracks
+                ), return_exceptions=True)
+                for outcome in outcomes:
+                    if isinstance(outcome, Exception):
+                        logger.error(f"Spotify background batch task failed: {outcome}")
+                await broadcast_downloads()
+
+            # Keep the task strongly referenced until all selected tracks have
+            # either entered the download queue or received an error state.
+            batch_task = asyncio.create_task(resolve_spotify_batch())
+            app.state.spotify_batch_tasks.add(batch_task)
+            batch_task.add_done_callback(app.state.spotify_batch_tasks.discard)
+
+            first_id = pending_tracks[0][0] if pending_tracks else ""
+            return {
+                "status": "started",
+                "id": first_id,
+                "count": len(pending_tracks),
+                "multiple": len(pending_tracks) > 1,
+                "selected_count": len(pending_tracks),
+                "resolving": True,
+            }
+
+        if "/artist/" in req.url.lower():
+            return {
+                "status": "error",
+                "message": "تعذر جلب أفضل أغاني الفنان من Spotify. جرّب مرة أخرى أو استخدم رابط أغنية أو ألبوم."
+            }
+        return {
+            "status": "error",
+            "message": "تعذر قراءة رابط Spotify. استخدم رابطًا عامًا لأغنية أو ألبوم أو Playlist."
+        }
+
     req.url = await resolve_short_url(req.url)
 
     is_yt_dlp = req.is_yt_dlp
@@ -332,7 +766,19 @@ async def add_download(req: DownloadRequest, db: Session = Depends(get_db)):
                 pass
 
     try:
-        download_id = start_download(req.url, db, use_ytdlp=is_yt_dlp, on_update=broadcast_update, save_path=req.save_path, quality=req.quality, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer, title=req.title)
+        download_id = start_download(
+            req.url, db,
+            use_ytdlp=is_yt_dlp,
+            on_update=broadcast_update,
+            save_path=req.save_path,
+            quality=req.quality,
+            cookies=req.cookies,
+            cookies_netscape=req.cookies_netscape,
+            headers=req.headers,
+            user_agent=req.user_agent,
+            referer=req.referer,
+            title=req.title
+        )
         logger.success(f"Download started successfully with ID: {download_id}")
         asyncio.create_task(broadcast_downloads())
         return {"status": "started", "id": download_id}
@@ -370,6 +816,9 @@ async def resume_download(db: Session = Depends(get_db), download_id: str = ""):
     if not download_id:
         return {"status": "not_found"}
     logger.info(f"Resume requested for ID: {download_id}")
+    current_worker = active_downloads.get(download_id)
+    if current_worker and not current_worker.stop_event.is_set() and not current_worker.thread_stop_event.is_set():
+        return {"status": "already_running"}
     db_rec = db.query(DownloadRecord).filter(DownloadRecord.id == download_id).first()
     if db_rec:
         def broadcast_update(dl_id):
@@ -385,16 +834,85 @@ async def resume_download(db: Session = Depends(get_db), download_id: str = ""):
                 db, 
                 use_ytdlp=db_rec.is_yt_dlp, 
                 on_update=broadcast_update,
-                existing_id=download_id
+                existing_id=download_id,
+                save_path=db_rec.save_path,
+                quality=db_rec.quality or "best",
+                cookies=db_rec.cookies,
+                user_agent=db_rec.user_agent,
+                referer=db_rec.referer,
+                title=db_rec.filename
             )
-            db_rec.status = "starting"
-            db.commit()
             asyncio.create_task(broadcast_downloads())
             return {"status": "resumed"}
         except Exception as e:
             logger.error(f"Failed to resume download {download_id}: {e}")
             return {"status": "error", "message": str(e)}
     return {"status": "not_found"}
+
+@app.post("/api/update-url")
+async def update_download_url(req: UpdateUrlRequest, db: Session = Depends(get_db)):
+    if not req.id or not req.new_url:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="id and new_url are required")
+    
+    clean_url = req.new_url.strip()
+    logger.info(f"Update URL requested for download ID {req.id}: {clean_url}")
+    
+    # 1. Stop active worker if running
+    if req.id in active_downloads:
+        dl = active_downloads[req.id]
+        dl.stop_event.set()
+        dl.thread_stop_event.set()
+        await asyncio.sleep(0.2)
+        
+    db_rec = db.query(DownloadRecord).filter(DownloadRecord.id == req.id).first()
+    if not db_rec:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Download record not found")
+        
+    clean_url = await resolve_short_url(clean_url)
+    db_rec.url = clean_url
+    db_rec.status = "starting"
+    db_rec.error_message = ""
+    db_rec.speed = 0
+    
+    smart_ref = get_smart_referer(clean_url, req.referer)
+    if smart_ref:
+        db_rec.referer = smart_ref
+    if req.cookies:
+        db_rec.cookies = req.cookies
+    if req.user_agent:
+        db_rec.user_agent = req.user_agent
+        
+    db.commit()
+    
+    def broadcast_update(dl_id):
+        if app_loop and not app_loop.is_closed():
+            try:
+                asyncio.run_coroutine_threadsafe(broadcast_downloads(), app_loop)
+            except Exception:
+                pass
+
+    try:
+        start_download(
+            db_rec.url,
+            db,
+            use_ytdlp=db_rec.is_yt_dlp,
+            on_update=broadcast_update,
+            existing_id=req.id,
+            save_path=db_rec.save_path,
+            quality=db_rec.quality or "best",
+            cookies=db_rec.cookies,
+            user_agent=db_rec.user_agent,
+            referer=db_rec.referer,
+            title=db_rec.filename
+        )
+        logger.success(f"Download {req.id} resumed successfully with new URL: {clean_url}")
+        asyncio.create_task(broadcast_downloads())
+        return {"status": "updated", "id": req.id}
+    except Exception as e:
+        logger.error(f"Failed to resume download {req.id} after URL update: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.delete("/api/cancel/")
 @app.delete("/api/cancel/{download_id}")
@@ -434,42 +952,57 @@ async def cancel_download(db: Session = Depends(get_db), download_id: str = "", 
     return {"status": "canceled", "download_id": download_id}
 
 
-def _cleanup_temp_files(filename: str = None, clean_all: bool = False):
-    """Remove .part, .ytdl, and fragment temp files from the downloads directory."""
-    import glob
-    cleaned = 0
+def _is_temp_download_file(filename: str) -> bool:
+    return (filename.endswith(('.part', '.ytdl')) or '.part-Frag' in filename
+            or any(filename.endswith(f'.part{i}') for i in range(32)))
+
+
+def _scan_temp_files(filename: str = None, clean_all: bool = False, protected_filenames=None):
+    """List only downloader partials below the configured download directory."""
+    candidates = []
+    protected = {os.path.basename(name) for name in (protected_filenames or []) if name}
     try:
-        for root, dirs, files in os.walk(BASE_DOWNLOAD_DIR):
-            for f in files:
-                # If we're not cleaning ALL files, and we have a specific filename
-                if not clean_all and filename:
-                    basename = filename.split('.part')[0]
-                    if not (f.startswith(filename) or f.startswith(basename)):
-                        continue
-                # If not cleaning all and no filename provided, skip to avoid deleting everything
-                elif not clean_all and not filename:
+        for root, _, files in os.walk(BASE_DOWNLOAD_DIR, followlinks=False):
+            for name in files:
+                if not _is_temp_download_file(name):
                     continue
-                    
-                is_temp = False
-                # Match common temp patterns
-                if f.endswith('.part') or f.endswith('.ytdl') or '.part-Frag' in f:
-                    is_temp = True
-                # Match partial chunks from our chunked downloader (e.g. file.ext.part0)
-                elif any(f.endswith(f'.part{i}') for i in range(32)):
-                    is_temp = True
-                    
-                if is_temp:
-                    try:
-                        path = os.path.join(root, f)
-                        os.remove(path)
-                        cleaned += 1
-                        logger.info(f"Cleaned temp file: {path}")
-                    except Exception as e:
-                        logger.warning(f"Failed to remove temp file {f}: {e}")
-        if cleaned > 0:
-            logger.success(f"Cleaned {cleaned} temporary file(s).")
-    except Exception as e:
-        logger.error(f"Error during temp file cleanup: {e}")
+                if not clean_all:
+                    if not filename:
+                        continue
+                    base = os.path.basename(filename).split('.part')[0]
+                    if not (name.startswith(filename) or name.startswith(base)):
+                        continue
+                # Never remove a partial associated with a queued, paused, or
+                # currently downloading record.
+                if any(name.startswith(item.split('.part')[0]) for item in protected):
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    size = os.path.getsize(path)
+                    if os.path.isfile(path):
+                        candidates.append({"path": path, "name": name, "size": size})
+                except OSError as exc:
+                    logger.debug(f"Skipping unreadable temp file {path}: {exc}")
+    except OSError as exc:
+        logger.error(f"Error scanning temporary files: {exc}")
+    return candidates
+
+
+def _cleanup_temp_files(filename: str = None, clean_all: bool = False, protected_filenames=None):
+    """Remove recognized downloader partials and report what was actually removed."""
+    removed = 0
+    freed_bytes = 0
+    for candidate in _scan_temp_files(filename, clean_all, protected_filenames):
+        try:
+            os.remove(candidate["path"])
+            removed += 1
+            freed_bytes += candidate["size"]
+            logger.info(f"Cleaned temp file: {candidate['path']}")
+        except OSError as exc:
+            logger.warning(f"Failed to remove temp file {candidate['name']}: {exc}")
+    if removed:
+        logger.success(f"Cleaned {removed} temporary file(s), freeing {freed_bytes} bytes.")
+    return {"status": "cleaned", "count": removed, "bytes_freed": freed_bytes}
 
 def sync_extract_info(url: str, ydl_opts: dict):
     import yt_dlp
@@ -478,7 +1011,89 @@ def sync_extract_info(url: str, ydl_opts: dict):
 
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
+    req.url = normalize_youtube_watch_url(req.url)
     logger.info(f"Fetching info for URL: {req.url}")
+    
+    # ── Spotify: Return metadata directly without hitting YouTube ──
+    if is_spotify_url(req.url):
+        res = await asyncio.to_thread(resolve_spotify, req.url)
+        if res and res.get("tracks"):
+            tracks = res["tracks"]
+            content_type = res.get("type", "track")
+            first_track = tracks[0]
+            
+            if content_type == "track":
+                # Single track — show proper artist + title
+                artist = first_track.get("artist", "")
+                title  = first_track.get("title", "Unknown")
+                display_title = f"{artist} - {title}" if artist else title
+                return {
+                    "status": "success",
+                    "download_info": {
+                        "is_spotify": True,
+                        "is_multi_track": False,
+                        "title": display_title,
+                        "tracks": [{
+                            "title": title,
+                            "artist": artist,
+                            "duration": first_track.get("duration"),
+                            "album": first_track.get("album", ""),
+                        }],
+                        "thumbnail": "",
+                        "sizes": {"audio": 0}
+                    }
+                }
+            else:
+                # Album / playlist — show all track names
+                track_names = []
+                for t in tracks:
+                    a = t.get("artist", "")
+                    n = t.get("title", "")
+                    track_names.append(f"{a} - {n}" if a else n)
+                
+                # Artist links resolve to the artist's Top tracks, while albums and
+                # playlists use their first track's metadata when available.
+                if content_type == "artist":
+                    album_title = "Top tracks"
+                    first_artist = res.get("artist", "") or first_track.get("artist", "")
+                else:
+                    album_title = first_track.get("album", "") or content_type.capitalize()
+                    first_artist = first_track.get("artist", "")
+                display_title = f"{first_artist} - {album_title}" if first_artist else album_title
+                
+                return {
+                    "status": "success",
+                    "download_info": {
+                        "is_spotify": True,
+                        "is_multi_track": True,
+                        "title": display_title,
+                        "track_count": len(tracks),
+                        "track_names": track_names[:50],  # cap at 50 for display
+                        "tracks": [
+                            {
+                                "title": t.get("title", ""),
+                                "artist": t.get("artist", ""),
+                                "duration": t.get("duration"),
+                                "album": t.get("album", ""),
+                            }
+                            for t in tracks
+                        ],
+                        "content_type": content_type,
+                        "thumbnail": "",
+                        "sizes": {"audio": 0}
+                    }
+                }
+        # Don't send an unrecognized Spotify page to yt-dlp; it is not a video URL.
+        if "/artist/" in req.url.lower():
+            return {
+                "status": "error",
+                "message": "تعذر جلب أفضل أغاني الفنان من Spotify. جرّب مرة أخرى أو استخدم رابط أغنية أو ألبوم."
+            }
+        return {
+            "status": "error",
+            "message": "تعذر قراءة رابط Spotify. استخدم رابطًا عامًا لأغنية أو ألبوم أو Playlist."
+        }
+    
     req.url = await resolve_short_url(req.url)
     
     try:
@@ -503,24 +1118,60 @@ async def get_info(req: InfoRequest):
             'quiet': True, 
             'no_warnings': True,
             'nocheckcertificate': True,
-            'ignoreerrors': True,
             'force_ipv4': True,
             'skip_download': True,
-            'socket_timeout': 15,
-            'flat_playlist': True,
+            'socket_timeout': 10,
+            'extract_flat': 'in_playlist',
+            'extractor_args': {'youtube': ['player_client=web_safari,web_embedded,-tv_downgraded', 'player_skip=configs'], 'generic': ['impersonate']},
+            'remote_components': ['ejs:github'],
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9,ar;q=0.8',
             }
         }
+
+        if req.user_agent:
+            ydl_opts['http_headers']['User-Agent'] = req.user_agent
+        if req.cookies:
+            ydl_opts['http_headers']['Cookie'] = req.cookies
+        if req.referer:
+            ydl_opts['http_headers']['Referer'] = req.referer
         
         if 'facebook.com' in req.url or 'fb.watch' in req.url:
             ydl_opts['force_ipv4'] = False
             ydl_opts['legacyserverconnect'] = True
             
-        info = await concurrency.run_in_threadpool(sync_extract_info, req.url, ydl_opts)
+        # Prefer an anonymous extraction for public videos. Browser cookies
+        # can make YouTube return "The page needs to be reloaded"; retry with
+        # them only when they may be needed for restricted videos.
+        extract_attempts = []
+        if req.cookies:
+            anonymous_opts = {**ydl_opts, 'http_headers': dict(ydl_opts['http_headers'])}
+            anonymous_opts['http_headers'].pop('Cookie', None)
+            extract_attempts.append(anonymous_opts)
+        extract_attempts.append(ydl_opts)
+
+        info = None
+        last_extract_error = None
+        for attempt_index, attempt_opts in enumerate(extract_attempts, start=1):
+            try:
+                candidate = await concurrency.run_in_threadpool(
+                    sync_extract_info, req.url, attempt_opts
+                )
+                if candidate:
+                    info = candidate
+                    if candidate.get('formats'):
+                        break
+            except Exception as extract_error:
+                last_extract_error = extract_error
+                logger.warning(
+                    f"Media extraction attempt {attempt_index}/{len(extract_attempts)} failed: {extract_error}"
+                )
+
         if not info:
+            if last_extract_error:
+                raise last_extract_error
             raise Exception("Failed to extract video information or unsupported site.")
                 
         formats = info.get('formats', [])
@@ -532,7 +1183,7 @@ async def get_info(req: InfoRequest):
                 "download_info": {
                     "title": info.get('title', 'Unknown Title'),
                     "thumbnail": info.get('thumbnail', ''),
-                    "sizes": {"best": root_size, "720p": root_size, "480p": root_size, "360p": root_size, "audio": root_size}
+                    "sizes": {"best": root_size, "1080p": root_size, "720p": root_size, "480p": root_size, "360p": root_size, "audio": root_size}
                 }
             }
         
@@ -573,16 +1224,22 @@ async def get_info(req: InfoRequest):
             return total
 
         total_best = calc_total(None)
+        total_1080 = calc_total(1080)
         total_720 = calc_total(720)
         total_480 = calc_total(480)
         total_360 = calc_total(360)
         
         # Ensure sizes are > 0 by falling back
+        if not total_1080: total_1080 = int(total_best * 0.85) if total_best else 0
         if not total_720: total_720 = int(total_best * 0.6) if total_best else 0
         if not total_480: total_480 = int(total_720 * 0.6) if total_720 else 0
         if not total_360: total_360 = int(total_480 * 0.6) if total_480 else 0
         
         # Ensure sizes are logically ordered and distinctly different to meet user expectations
+        if total_1080 >= total_best and total_best > 0:
+            total_1080 = int(total_best * 0.9)
+        if total_720 >= total_1080 and total_1080 > 0:
+            total_720 = int(total_1080 * 0.75)
         if total_720 >= total_best and total_best > 0:
             total_720 = int(total_best * 0.7)
         if total_480 >= total_720 and total_720 > 0:
@@ -607,6 +1264,7 @@ async def get_info(req: InfoRequest):
                 "thumbnail": info.get('thumbnail', ''),
                 "sizes": {
                     "best": total_best,
+                    "1080p": total_1080,
                     "720p": total_720,
                     "480p": total_480,
                     "360p": total_360,
@@ -665,26 +1323,80 @@ async def broadcast_system_stats():
     except Exception as e:
         logger.error(f"Error broadcasting system stats: {e}")
 
+def add_queue_positions(downloads):
+    """Attach a stable one-based position to downloads waiting for a worker slot."""
+    queued = [item for item in downloads if item.get("status") == "starting"]
+    queued.sort(key=lambda item: (float(item.get("created_at") or 0), item.get("id") or ""))
+    queue_total = len(queued)
+    for position, item in enumerate(queued, start=1):
+        item["queue_position"] = position
+        item["queue_total"] = queue_total
+    return downloads
+
+
 async def broadcast_downloads():
     with SessionLocal() as db:
         try:
             records = db.query(DownloadRecord).all()
             downloads = []
             now_ms = time.time() * 1000
+            seen_ids = set()
             for rec in records:
+                seen_ids.add(rec.id)
+                # Overlay in-memory cache on top of DB data for real-time progress
+                cache = IN_MEMORY_DB_CACHE.get(rec.id, {})
+                status = cache.get("status", rec.status)
+                progress = cache.get("progress", rec.progress)
+                speed = cache.get("speed", rec.speed)
+                total_size = cache.get("total_size", rec.total_size)
+                downloaded_val = cache.get("downloaded", rec.downloaded)
+                filename = cache.get("filename", rec.filename)
+                error_message = cache.get("error_message", rec.error_message)
+
+                final_path = getattr(rec, 'save_path', None)
+                if not final_path and filename:
+                    final_path = os.path.join(get_category_dir(filename), filename)
+                
                 downloads.append({
                     "id": rec.id,
                     "url": rec.url,
-                    "status": rec.status,
-                    "progress": rec.progress,
-                    "speed": rec.speed,
-                    "total_size": rec.total_size,
-                    "downloaded": rec.downloaded,
-                    "filename": rec.filename,
-                    "error_message": rec.error_message,
-                    "created_at": getattr(rec, 'created_at', None) or now_ms
+                    "status": status,
+                    "progress": progress,
+                    "speed": speed,
+                    "total_size": total_size,
+                    "downloaded": downloaded_val,
+                    "filename": filename,
+                    "error_message": error_message,
+                    "created_at": getattr(rec, 'created_at', None) or now_ms,
+                    "completed_at": cache.get("completed_at", getattr(rec, 'completed_at', None)),
+                    "save_path": final_path
                 })
+                
+            from downloader import active_downloads
+            for d_id, ctx in active_downloads.items():
+                if d_id not in seen_ids:
+                    cache = IN_MEMORY_DB_CACHE.get(d_id, {})
+                    filename = cache.get("filename", "")
+                    final_path = getattr(ctx, 'save_path', None)
+                    if not final_path and filename:
+                        final_path = os.path.join(get_category_dir(filename), filename)
+                    
+                    downloads.append({
+                        "id": d_id,
+                        "url": getattr(ctx, 'url', ''),
+                        "status": cache.get("status", "starting"),
+                        "progress": cache.get("progress", 0.0),
+                        "speed": cache.get("speed", 0.0),
+                        "total_size": cache.get("total_size", 0.0),
+                        "downloaded": cache.get("downloaded", 0.0),
+                        "filename": filename,
+                        "error_message": cache.get("error_message", ""),
+                        "created_at": now_ms,
+                        "completed_at": cache.get("completed_at"),
+                        "save_path": final_path
+                    })
             
+            add_queue_positions(downloads)
             payload = {
                 "type": "downloads",
                 "downloads": downloads
@@ -698,20 +1410,63 @@ async def get_all_downloads(db: Session = Depends(get_db)):
     records = db.query(DownloadRecord).all()
     downloads = []
     now_ms = time.time() * 1000
+    seen_ids = set()
     for rec in records:
+        seen_ids.add(rec.id)
+        # Overlay in-memory cache on top of DB data for real-time progress
+        cache = IN_MEMORY_DB_CACHE.get(rec.id, {})
+        status = cache.get("status", rec.status)
+        progress = cache.get("progress", rec.progress)
+        speed = cache.get("speed", rec.speed)
+        total_size = cache.get("total_size", rec.total_size)
+        downloaded_val = cache.get("downloaded", rec.downloaded)
+        filename = cache.get("filename", rec.filename)
+        error_message = cache.get("error_message", rec.error_message)
+
+        final_path = getattr(rec, 'save_path', None)
+        if not final_path and filename:
+            final_path = os.path.join(get_category_dir(filename), filename)
+            
         downloads.append({
             "id": rec.id,
             "url": rec.url,
-            "status": rec.status,
-            "progress": rec.progress,
-            "speed": rec.speed,
-            "total_size": rec.total_size,
-            "downloaded": rec.downloaded,
-            "filename": rec.filename,
-            "error_message": rec.error_message,
-            "created_at": getattr(rec, 'created_at', None) or now_ms
+            "status": status,
+            "progress": progress,
+            "speed": speed,
+            "total_size": total_size,
+            "downloaded": downloaded_val,
+            "filename": filename,
+            "error_message": error_message,
+            "created_at": getattr(rec, 'created_at', None) or now_ms,
+            "completed_at": cache.get("completed_at", getattr(rec, 'completed_at', None)),
+            "save_path": final_path
         })
-    return downloads
+        
+    from downloader import active_downloads
+    for d_id, ctx in active_downloads.items():
+        if d_id not in seen_ids:
+            cache = IN_MEMORY_DB_CACHE.get(d_id, {})
+            filename = cache.get("filename", "")
+            final_path = getattr(ctx, 'save_path', None)
+            if not final_path and filename:
+                final_path = os.path.join(get_category_dir(filename), filename)
+            
+            downloads.append({
+                "id": d_id,
+                "url": getattr(ctx, 'url', ''),
+                "status": cache.get("status", "starting"),
+                "progress": cache.get("progress", 0.0),
+                "speed": cache.get("speed", 0.0),
+                "total_size": cache.get("total_size", 0.0),
+                "downloaded": cache.get("downloaded", 0.0),
+                "filename": filename,
+                "error_message": cache.get("error_message", ""),
+                "created_at": now_ms,
+                "completed_at": cache.get("completed_at"),
+                "save_path": final_path
+            })
+            
+    return add_queue_positions(downloads)
 
 class ScheduleRequest(BaseModel):
     url: str
@@ -720,6 +1475,7 @@ class ScheduleRequest(BaseModel):
     quality: Optional[str] = "best"
     run_at: str
     title: Optional[str] = None
+    selected_track_indices: Optional[List[int]] = None
 
 @app.post("/api/schedule")
 async def schedule_download(req: ScheduleRequest, db: Session = Depends(get_db)):
@@ -727,7 +1483,30 @@ async def schedule_download(req: ScheduleRequest, db: Session = Depends(get_db))
     req.url = await resolve_short_url(req.url)
     run_date = datetime.fromisoformat(req.run_at.replace('Z', '+00:00'))
     
-    def job_func(url, is_yt_dlp, save_path, quality, title):
+    def job_func(url, is_yt_dlp, save_path, quality, title, selected_track_indices):
+        if selected_track_indices is not None and is_spotify_url(url):
+            async def start_scheduled_download():
+                db_session = SessionLocal()
+                try:
+                    scheduled_req = DownloadRequest(
+                        url=url,
+                        is_yt_dlp=True,
+                        save_path=save_path,
+                        quality=quality,
+                        title=title,
+                        selected_track_indices=selected_track_indices,
+                    )
+                    result = await add_download(scheduled_req, db_session)
+                    logger.info(f"Scheduled Spotify selection started: {result}")
+                finally:
+                    db_session.close()
+
+            if app_loop and not app_loop.is_closed():
+                asyncio.run_coroutine_threadsafe(start_scheduled_download(), app_loop)
+            else:
+                logger.error("Could not start scheduled Spotify selection: app event loop is unavailable")
+            return
+
         db_session = SessionLocal()
         try:
             download_id = start_download(url, db_session, use_ytdlp=is_yt_dlp, save_path=save_path, quality=quality, title=title)
@@ -741,7 +1520,7 @@ async def schedule_download(req: ScheduleRequest, db: Session = Depends(get_db))
         job_func, 
         'date', 
         run_date=run_date, 
-        args=[req.url, req.is_yt_dlp, req.save_path, req.quality, req.title]
+        args=[req.url, req.is_yt_dlp, req.save_path, req.quality, req.title, req.selected_track_indices]
     )
     return {"status": "scheduled", "time": str(run_date)}
 
@@ -764,12 +1543,32 @@ async def get_stats(db: Session = Depends(get_db)):
         "audios": audio_count
     }
 
+def _protected_partial_filenames(db: Session):
+    return [row.filename for row in db.query(DownloadRecord.filename)
+            .filter(DownloadRecord.status.in_(("starting", "queued", "downloading", "paused")))
+            .all() if row.filename]
+
+
+@app.get("/api/cleanup-preview")
+async def cleanup_preview(db: Session = Depends(get_db)):
+    """Preview eligible partial files without changing anything."""
+    protected = _protected_partial_filenames(db)
+    candidates = await concurrency.run_in_threadpool(_scan_temp_files, None, True, protected)
+    return {
+        "count": len(candidates),
+        "bytes": sum(item["size"] for item in candidates),
+        "files": [{"name": item["name"], "size": item["size"]} for item in candidates[:8]],
+        "truncated": len(candidates) > 8
+    }
+
+
 @app.post("/api/cleanup-temps")
-async def cleanup_temps():
-    """Manually trigger cleanup of all temporary/partial files in the downloads directory."""
+async def cleanup_temps(db: Session = Depends(get_db)):
+    """Clean eligible temp files while preserving partials tied to active downloads."""
     logger.info("Manual temp file cleanup triggered.")
-    await concurrency.run_in_threadpool(_cleanup_temp_files, None, True)
-    return {"status": "cleaned"}
+    protected = _protected_partial_filenames(db)
+    result = await concurrency.run_in_threadpool(_cleanup_temp_files, None, True, protected)
+    return result
 
 @app.delete("/api/clear-history")
 async def clear_history(db: Session = Depends(get_db)):
@@ -792,7 +1591,9 @@ async def clear_completed_history(db: Session = Depends(get_db)):
     """Clear only completed download records from the database."""
     logger.info("Clearing completed download history from database.")
     try:
-        query = db.query(DownloadRecord).filter(DownloadRecord.status == "completed")
+        query = db.query(DownloadRecord).filter(
+            (DownloadRecord.status == "completed") | (DownloadRecord.progress == 100)
+        )
         count = query.count()
         query.delete()
         db.commit()
@@ -872,6 +1673,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             db_rec = db.query(DownloadRecord).filter(DownloadRecord.id == dl_id).first()
                             if db_rec:
                                 db_rec.status = "paused"
+                                db_rec.speed = 0
                                 db.commit()
                             await broadcast_downloads()
                         elif action == "cancel":
@@ -910,6 +1712,28 @@ async def startup_event():
     
     import subprocess
     logger.info("Ledo Downloader Backend is starting up...")
+
+    # A resolving record cannot resume after a process restart because its
+    # in-memory search task is gone. Mark it clearly instead of leaving a
+    # spinner in the user's queue forever.
+    recovery_db = SessionLocal()
+    try:
+        interrupted = recovery_db.query(DownloadRecord).filter(
+            DownloadRecord.status == "resolving"
+        ).all()
+        for record in interrupted:
+            record.status = "error"
+            record.progress = 0
+            record.speed = 0
+            record.error_message = "توقف البحث عن الأغنية عند إغلاق التطبيق. أعد إضافتها للمحاولة مرة أخرى."
+        if interrupted:
+            recovery_db.commit()
+            logger.warning(f"Marked {len(interrupted)} interrupted Spotify search(es) for retry")
+    except Exception:
+        recovery_db.rollback()
+        logger.exception("Could not recover interrupted Spotify search records")
+    finally:
+        recovery_db.close()
     
     # Auto-Updater for yt-dlp (Disabled during dev to prevent nodemon/uvicorn restart loops)
     # logger.info("Checking for yt-dlp updates in the background...")
@@ -923,4 +1747,4 @@ async def startup_event():
 if __name__ == "__main__":
     logger.info("Starting Uvicorn server...")
     # host="127.0.0.1" restricts connections to the local machine only (closes IP vulnerabilities)
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("LEDO_BACKEND_PORT", "8000")), log_level="warning")

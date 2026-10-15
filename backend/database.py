@@ -39,6 +39,7 @@ class DownloadRecord(Base):
     is_yt_dlp = Column(Boolean, default=False)
     error_message = Column(String, default="")
     created_at = Column(Float, default=lambda: time.time() * 1000)
+    completed_at = Column(Float, nullable=True)
     
     # Newly added fields for robust pause/resume
     save_path = Column(String, nullable=True)
@@ -67,7 +68,8 @@ def auto_migrate():
                 "quality": "STRING DEFAULT 'best'",
                 "cookies": "STRING",
                 "user_agent": "STRING",
-                "referer": "STRING"
+                "referer": "STRING",
+                "completed_at": "FLOAT"
             }
             for col, type_def in new_cols.items():
                 if col not in columns:
