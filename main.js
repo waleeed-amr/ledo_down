@@ -9,9 +9,11 @@ const contextMenu = require('electron-context-menu'); // 5. electron-context-men
 const os = require('os');
 const { checkIntegrity } = require('./integrity_check.js');
 
-// Memory optimization flags: cap V8 heap and prevent renderer background memory buildup
+// Use the branded name in Windows taskbar, notifications, and app identity.
+app.setName('Ledo Downloader');
+
+// Keep renderer heaps bounded and let Chromium throttle hidden windows.
 app.commandLine.appendSwitch('js-flags', '--max-old-space-size=160');
-app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 // ── Auto-Updater Configuration ──────────────────────────────────────────
 autoUpdater.autoDownload = true;        // تنزيل التحديث تلقائياً فور اكتشافه
@@ -28,7 +30,7 @@ contextMenu({
   showSaveImageAs: true,
   showCopyImage: true,
   showCopyImageAddress: true,
-  showSelectAll: true,
+  showSelectAll: false,
 });
 
 // تحويل أخطاء console إلى ملف السجل في الإنتاج
@@ -70,9 +72,16 @@ let miniProgressWindow;
 let pythonProcess;
 let tray = null;
 let isQuiting = false;
+let mainPageLoaded = false;
+let backendStartTimer = null;
+let updaterStartupTimer = null;
+let backendMonitorStarted = false;
+let backendReadyPromise = null;
+let launchedAtLogin = false;
 let clipboardInterval = null;
 let lastClipboard = '';
 let smartClipboardEnabled = true;
+let smartPastePromptPending = false;
 let lastCpuInfo = os.cpus();
 
 const gotTheLock = app.requestSingleInstanceLock();
@@ -105,7 +114,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      backgroundThrottling: false,
+      backgroundThrottling: true,  // Throttle timers/animations when window is hidden
       sandbox: false
     }
   });
@@ -121,7 +130,7 @@ function createWindow() {
   }
 
   mainWindow.setMenu(null);
-  mainWindow.loadFile(path.join(__dirname, 'frontend', 'index.html'));
+  if (!isStartup) loadMainPage();
   
   // F12 to toggle DevTools
   mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -131,20 +140,35 @@ function createWindow() {
   });
 
   mainWindow.on('close', (event) => {
-    if (!isQuiting) {
+    if (!isQuiting && store.get('closeToTray', true)) {
       event.preventDefault();
       mainWindow.hide();
       mainWindow.setSkipTaskbar(true);
       notifyTrayMinimized();
+    } else if (!isQuiting) {
+      isQuiting = true;
+      app.quit();
     }
   });
 
   mainWindow.on('show', () => {
     mainWindow.setSkipTaskbar(false);
+    loadMainPage();
+    ensureBackendStarted();
+    // Resume rendering immediately so UI is responsive
+    try { mainWindow.webContents.resume(); } catch(e) {}
+    try { mainWindow.webContents.setBackgroundThrottling(false); } catch(e) {}
   });
 
   mainWindow.on('hide', () => {
     mainWindow.setSkipTaskbar(true);
+    // Suspend rendering to drop GPU/CPU usage to near zero
+    try { mainWindow.webContents.setBackgroundThrottling(true); } catch(e) {}
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+        try { mainWindow.webContents.suspend(); } catch(e) {}
+      }
+    }, 500); // Small delay to let the hide animation finish first
   });
 
   mainWindow.on('blur', () => {
@@ -154,6 +178,16 @@ function createWindow() {
   mainWindow.on('focus', () => {
     mainWindow.webContents.send('window-focus-change', true);
   });
+}
+
+function loadMainPage() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainPageLoaded) return;
+  mainPageLoaded = true;
+  mainWindow.loadFile(path.join(__dirname, 'frontend', 'index.html'))
+    .catch((err) => {
+      mainPageLoaded = false;
+      log.error('Failed to load main window:', err);
+    });
 }
 
 function startPythonBackend() {
@@ -188,12 +222,57 @@ function startPythonBackend() {
   });
 }
 
+function ensureBackendStarted() {
+  if (backendStartTimer) {
+    clearTimeout(backendStartTimer);
+    backendStartTimer = null;
+  }
+  if (backendMonitorStarted) return backendReadyPromise || Promise.resolve(false);
+  backendMonitorStarted = true;
+  const healthUrl = 'http://127.0.0.1:8000/api/health';
+  backendReadyPromise = (async () => {
+    // Reuse an already-running local engine instead of launching another copy.
+    if (!(await isBackendReady(healthUrl, 700))) startPythonBackend();
+    await waitForBackend(healthUrl, 60000);
+    return true;
+  })()
+    .then(() => {
+      log.info('Local download backend is ready.');
+      return true;
+    })
+    .catch((err) => {
+      log.error('Local download backend startup failed:', err);
+      if (!isQuiting) {
+        dialog.showErrorBox("Startup Error", "The backend server took too long to start or the port is in use. Please check if Ledo Downloader is already running or restart the application.");
+        app.quit();
+      }
+      return false;
+    });
+  return backendReadyPromise;
+}
+
+function isBackendReady(url, timeout = 700) {
+  const http = require('http');
+  return new Promise((resolve) => {
+    const req = http.get(url, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.setTimeout(timeout, () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
 function waitForBackend(url, timeout = 60000) {
   const http = require('http');
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const check = () => {
       const req = http.get(url, (res) => {
+        res.resume();
         if (res.statusCode === 200) {
             resolve();
         } else {
@@ -249,7 +328,7 @@ function createMiniProgressWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
-      backgroundThrottling: false
+      backgroundThrottling: true
     }
   });
   
@@ -299,6 +378,7 @@ function setupTray() {
     {
       label: 'Quick Add (Ctrl+Space)',
       click: () => {
+        ensureBackendStarted();
         if (!quickAddWindow || quickAddWindow.isDestroyed()) createQuickAddWindow();
         quickAddWindow.show();
         quickAddWindow.focus();
@@ -366,35 +446,118 @@ function setupIpcHandlers() {
 
   ipcMain.handle('set-auto-launch', (_event, enabled) => {
     try {
-      app.setLoginItemSettings({
-        openAtLogin: !!enabled,
-        openAsHidden: false
-      });
-      return app.getLoginItemSettings().openAtLogin;
+      if (!app.isPackaged) return { available: false, enabled: false };
+      applyAutoLaunch(!!enabled);
+      return { available: true, enabled: !!app.getLoginItemSettings().openAtLogin };
     } catch (e) {
       log.error('set-auto-launch error:', e);
-      return false;
+      return { available: false, enabled: false };
     }
   });
+
+  ipcMain.handle('set-close-to-tray', (_event, enabled) => {
+    try {
+      store.set('closeToTray', !!enabled);
+      return { success: true, enabled: !!store.get('closeToTray', true) };
+    } catch (e) {
+      log.error('set-close-to-tray error:', e);
+      return { success: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('ensure-backend-ready', async () => ({ success: await ensureBackendStarted() }));
 
   // Smart clipboard control
   ipcMain.on('set-smart-clipboard', (_event, enabled) => {
     smartClipboardEnabled = !!enabled;
     log.info(`Smart clipboard monitor set to: ${smartClipboardEnabled}`);
   });
+  ipcMain.on('smart-paste-dismissed', () => {
+    smartPastePromptPending = false;
+  });
 
   // Open Extension Folder
   ipcMain.handle('open-extension-folder', async () => {
     try {
-      const extPath = path.join(__dirname, 'browser_extension');
+      const extPath = app.isPackaged
+        ? path.join(process.resourcesPath, 'browser_extension')
+        : path.join(__dirname, 'browser_extension');
       if (fs.existsSync(extPath)) {
-        await shell.openPath(extPath);
-        return true;
+        const error = await shell.openPath(extPath);
+        return { success: !error, error: error || null };
       }
+      return { success: false, error: `Extension folder not found: ${extPath}` };
     } catch (e) {
       log.error('open-extension-folder error:', e);
+      return { success: false, error: e.message };
     }
-    return false;
+  });
+
+  ipcMain.handle('get-extension-package-status', () => {
+    try {
+      const extPath = app.isPackaged
+        ? path.join(process.resourcesPath, 'browser_extension')
+        : path.join(__dirname, 'browser_extension');
+      const manifestPath = path.join(extPath, 'manifest.json');
+      if (!fs.existsSync(manifestPath)) {
+        return { available: false, error: 'ملف تعريف الإضافة غير موجود.' };
+      }
+      const manifest = fs.readJsonSync(manifestPath);
+      const declaredFiles = [
+        manifest.background?.service_worker,
+        manifest.action?.default_popup,
+        ...(manifest.content_scripts || []).flatMap(script => script.js || []),
+        ...Object.values(manifest.icons || {})
+      ].filter(Boolean);
+      const requiredFiles = declaredFiles.map(file => path.join(extPath, file));
+      const missingFiles = requiredFiles.filter(file => !fs.existsSync(file));
+      if (missingFiles.length) {
+        return { available: false, error: 'بعض ملفات الإضافة ناقصة.' };
+      }
+      return { available: true, name: manifest.name, version: manifest.version, path: extPath };
+    } catch (e) {
+      log.error('get-extension-package-status error:', e);
+      return { available: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('open-extension-setup', async () => {
+    try {
+      const extPath = app.isPackaged
+        ? path.join(process.resourcesPath, 'browser_extension')
+        : path.join(__dirname, 'browser_extension');
+      if (!fs.existsSync(extPath)) {
+        return { success: false, error: `Extension folder not found: ${extPath}` };
+      }
+
+      const roots = [process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)'], process.env.LOCALAPPDATA]
+        .filter(Boolean);
+      const browsers = [
+        ...roots.map(root => ({
+          name: 'Chrome',
+          path: path.join(root, 'Google', 'Chrome', 'Application', 'chrome.exe')
+        })),
+        ...roots.map(root => ({
+          name: 'Edge',
+          path: path.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe')
+        }))
+      ];
+      const browser = browsers.find(candidate => fs.existsSync(candidate.path));
+      if (!browser) return { success: false, error: 'لم يتم العثور على Chrome أو Edge.' };
+
+      const child = spawn(browser.path, ['chrome://extensions'], { detached: true, stdio: 'ignore' });
+      await new Promise((resolve, reject) => {
+        child.once('spawn', resolve);
+        child.once('error', reject);
+      });
+      child.unref();
+      const folderError = await shell.openPath(extPath);
+      if (folderError) return { success: false, error: folderError };
+      return { success: true, browser: browser.name, extensionPath: extPath };
+    } catch (e) {
+      log.error('open-extension-setup error:', e);
+      return { success: false, error: e.message };
+    }
   });
 
   // App Version
@@ -540,9 +703,14 @@ function setupIpcHandlers() {
     } else if (action === 'close') {
       if (win === mainWindow) {
         if (!isQuiting) {
-          mainWindow.hide();
-          mainWindow.setSkipTaskbar(true);
-          notifyTrayMinimized();
+          if (store.get('closeToTray', true)) {
+            mainWindow.hide();
+            mainWindow.setSkipTaskbar(true);
+            notifyTrayMinimized();
+          } else {
+            isQuiting = true;
+            app.quit();
+          }
         } else {
           mainWindow.close();
         }
@@ -556,6 +724,7 @@ function setupIpcHandlers() {
 
   // Quick Add IPC
   ipcMain.on('show-quick-add', (_event, payload) => {
+    ensureBackendStarted();
     if (!quickAddWindow || quickAddWindow.isDestroyed()) {
       createQuickAddWindow();
     }
@@ -645,13 +814,21 @@ app.whenReady().then(async () => {
 
   // Ensure IPC handlers are registered before anything else might fail
   setupIpcHandlers();
+
+  const loginSettings = app.getLoginItemSettings();
+  launchedAtLogin = process.argv.includes('--hidden') || process.argv.includes('-hidden') || loginSettings.wasOpenedAtLogin;
+  // The mini progress window is created on demand when the first download starts.
   
-  try {
-    // فحص وتنزيل التحديثات تلقائيا إذا توفرت
-    autoUpdater.checkForUpdatesAndNotify();
-  } catch (err) {
-    log.warn('Auto updater error:', err);
-  }
+  const checkForUpdates = () => {
+    try {
+      // فحص وتنزيل التحديثات تلقائيا إذا توفرت
+      autoUpdater.checkForUpdatesAndNotify();
+    } catch (err) {
+      log.warn('Auto updater error:', err);
+    }
+  };
+  if (launchedAtLogin) updaterStartupTimer = setTimeout(checkForUpdates, 30000);
+  else checkForUpdates();
 
   // ── Auto-Updater Events → Renderer ──────────────────────────────────────
   autoUpdater.on('checking-for-update', () => {
@@ -719,20 +896,20 @@ app.whenReady().then(async () => {
 
   setupTray();
 
-  startPythonBackend();
-  try {
-      await waitForBackend('http://127.0.0.1:8000/api/health', 60000);
-  } catch (err) {
-      dialog.showErrorBox("Startup Error", "The backend server took too long to start or the port is in use. Please check if Ledo Downloader is already running or restart the application.");
-      app.quit();
-      return;
-  }
   createWindow();
-  createQuickAddWindow();
-  createMiniProgressWindow();
+  if (launchedAtLogin) {
+    // Keep Windows login startup lightweight: don't load the hidden renderer or
+    // import the Python engine until the user opens Ledo, then warm it shortly after login.
+    backendStartTimer = setTimeout(ensureBackendStarted, 12000);
+  } else {
+    ensureBackendStarted();
+  }
+
+  // Windows are created lazily on demand to save memory
 
   // Register Global Shortcut
   const shortcutRegistered = globalShortcut.register('CommandOrControl+Space', () => {
+    ensureBackendStarted();
     if (!quickAddWindow || quickAddWindow.isDestroyed()) {
       createQuickAddWindow();
     }
@@ -758,26 +935,26 @@ app.whenReady().then(async () => {
     const text = clipboard.readText();
     if (text !== lastClipboard && (text.includes('tiktok.com') || text.includes('youtube.com') || text.includes('instagram.com') || text.includes('fb.watch') || text.includes('x.com') || text.includes('spotify.com'))) {
         lastClipboard = text;
-        dialog.showMessageBox(mainWindow, {
-            type: 'question',
-            buttons: ['Yes', 'No'],
-            title: 'Smart Paste Detected',
-            message: `Do you want to download this video?\n${text}`
-        }).then(result => {
-            if (result.response === 0) {
-                mainWindow.show();
-                mainWindow.webContents.executeJavaScript(`
-                    document.getElementById('url-input').value = '${text}';
-                    document.getElementById('btn-fetch-info').click();
-                `);
-            }
-        });
+        if (smartPastePromptPending || !mainWindow || mainWindow.isDestroyed()) return;
+        smartPastePromptPending = true;
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        if (!mainWindow.isVisible()) mainWindow.show();
+        mainWindow.focus();
+        mainWindow.webContents.send('smart-paste-detected', text);
     }
   }, 2000);
 });
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  if (backendStartTimer) {
+    clearTimeout(backendStartTimer);
+    backendStartTimer = null;
+  }
+  if (updaterStartupTimer) {
+    clearTimeout(updaterStartupTimer);
+    updaterStartupTimer = null;
+  }
   if (clipboardInterval) {
     clearInterval(clipboardInterval);
     clipboardInterval = null;

@@ -1,98 +1,61 @@
 @echo off
-set "ROOT_DIR=%~dp0"
-cd /d "%ROOT_DIR%"
-setlocal enabledelayedexpansion
+setlocal
+cd /d "%~dp0"
+title Ledo Downloader - Full Build
 
-echo ========================================================
-echo   Ledo Downloader - Standalone Setup Build Script
-echo ========================================================
+echo ========================================
+echo   Building Ledo Downloader (Backend + Frontend)
+echo ========================================
+echo.
 
-:: Detect Python & PyInstaller
-set "PYTHON_EXE=python"
-set "PYINSTALLER_EXE=pyinstaller"
-
-if exist "%ROOT_DIR%.venv\Scripts\python.exe" (
-    echo [*] Virtual environment detected: .venv. Using it...
-    set "PYTHON_EXE=%ROOT_DIR%.venv\Scripts\python.exe"
-    set "PIP_EXE=%ROOT_DIR%.venv\Scripts\pip.exe"
-    if exist "%ROOT_DIR%.venv\Scripts\pyinstaller.exe" (
-        set "PYINSTALLER_EXE=%ROOT_DIR%.venv\Scripts\pyinstaller.exe"
+if not exist ".venv\Scripts\python.exe" (
+    echo [1/4] Creating Python virtual environment...
+    where py >nul 2>&1
+    if not errorlevel 1 (
+        py -3 -m venv .venv
     ) else (
-        echo [*] Installing PyInstaller in virtual environment...
-        call "!PIP_EXE!" install pyinstaller
-        set "PYINSTALLER_EXE=%ROOT_DIR%.venv\Scripts\pyinstaller.exe"
+        where python >nul 2>&1
+        if errorlevel 1 goto :python_missing
+        python -m venv .venv
     )
-) else (
-    echo [*] Checking system PyInstaller...
-    where pyinstaller >nul 2>&1
-    if errorlevel 1 (
-        echo [*] Installing requirements and PyInstaller...
-        pip install -r backend\requirements.txt
-        pip install pyinstaller
-    )
+    if errorlevel 1 goto :failed
 )
+
+echo [2/4] Installing/verifying backend build dependencies...
+call ".venv\Scripts\python.exe" -m pip install -r "backend\requirements.txt" pyinstaller
+if errorlevel 1 goto :failed
 
 echo.
-echo [1/3] Building Python Backend with PyInstaller...
-cd /d "%ROOT_DIR%backend" || (
-    echo [!] ERROR: Could not find 'backend' folder!
-    pause
-    exit /b 1
-)
-if exist "dist\main.exe" del /f /q "dist\main.exe"
-echo Compiling backend into standalone executable...
-call "!PYINSTALLER_EXE!" --noconfirm --onefile --windowed --noupx main.py
-if errorlevel 1 (
-    echo [!] ERROR: PyInstaller failed to compile the backend!
-    cd /d "%ROOT_DIR%"
-    pause
-    exit /b 1
-)
-cd /d "%ROOT_DIR%"
+echo [3/4] Building backend...
+call "back build.bat" /nopause
+if errorlevel 1 goto :failed
 
-if not exist "%ROOT_DIR%backend\dist\main.exe" (
-    echo [!] ERROR: backend\dist\main.exe was not created!
-    pause
-    exit /b 1
-)
-echo [OK] Backend compiled successfully: backend\dist\main.exe
-
-echo.
-echo [2/3] Checking Node Dependencies...
-if not exist "node_modules\" (
-    echo Installing Node dependencies...
+if not exist "node_modules" (
+    echo Installing frontend build dependencies...
     call npm install
-) else (
-    echo Node dependencies already installed. Skipping...
+    if errorlevel 1 goto :failed
 )
 
 echo.
-echo [3/3] Packaging Standalone Setup Installer (Electron + NSIS)...
-if exist "dist\" (
-    echo Cleaning previous dist folder...
-    rmdir /s /q "dist" 2>nul
-)
-call npm run build
-if errorlevel 1 (
-    echo [!] ERROR: Electron build failed!
-    pause
-    exit /b 1
-)
+echo [4/4] Building frontend and packaging the application...
+call "front build.bat"
+if errorlevel 1 goto :failed
 
 echo.
-echo ========================================================
-echo   BUILD SUCCESSFUL!
-echo ========================================================
-echo.
-echo Standalone Setup file is generated in the "dist" folder:
-echo.
-for %%F in (dist\*Setup*.exe) do (
-    echo   ==^> dist\%%~nxF - Size: %%~zF bytes
-)
-echo.
-echo You can now send this single Setup file to anyone.
-echo It installs everything completely with zero extra requirements!
-echo ========================================================
-echo.
+echo ========================================
+echo   FULL BUILD COMPLETED SUCCESSFULLY
+echo ========================================
+echo Backend: backend\dist\main.exe
+echo Installer: dist\Ledo-Downloader-Setup-*.exe
 pause
 exit /b 0
+
+:python_missing
+echo [ERROR] Python 3 was not found. Install Python and try again.
+goto :failed
+
+:failed
+echo.
+echo [ERROR] Build failed. Review the messages above.
+pause
+exit /b 1

@@ -1,11 +1,12 @@
 {
   "name": "ledo-downloader",
+  "productName": "Ledo Downloader",
   "version": "3.9.2020",
   "description": "Ledo Downloader - High Speed Download Manager",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder --publish never"
   },
   "author": "Waleed amr",
   "license": "ISC",
@@ -33,6 +34,8 @@
     },
     "icon": "frontend/icon.ico",
     "win": {
+      "executableName": "Ledo Downloader",
+      "signAndEditExecutable": true,
       "target": [
         {
           "target": "nsis",
