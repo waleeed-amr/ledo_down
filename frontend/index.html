@@ -110,18 +110,48 @@
                             <span id="btn-fetch-text">Fetch Info</span>
                         </button>
                     </div>
-                    <div id="selected-path-display"
-                        style="cursor: default; color: var(--text-muted); font-size: 13px; margin-top: 10px; display: none;">
-                        Saving to: <span id="active-save-path"
-                            style="color: var(--accent-primary); font-weight: 600;"></span></div>
-
-                    <!-- Advanced Filter & Sort Bar -->
+                    <!-- Save location and download tools share one compact utility row. -->
+                    <div class="downloads-utility-row">
+                    <div id="selected-path-display" class="selected-path-display">
+                        <i data-lucide="folder-down" aria-hidden="true"></i>
+                        <span>Saving to:</span> <span id="active-save-path"></span>
+                    </div>
+                    <div class="downloads-tools-row">
+                        <div class="download-actions-menu">
+                            <button id="btn-toggle-download-actions" class="download-tool-button" type="button"
+                                aria-label="Download actions" aria-expanded="false" aria-controls="download-actions-popover"
+                                title="Download actions">
+                                <i data-lucide="ellipsis" aria-hidden="true"></i>
+                            </button>
+                            <div id="download-actions-popover" class="download-actions-popover" hidden>
+                                <button id="btn-pause-all" class="download-action-option" type="button" title="Pause all active downloads">
+                                    <i data-lucide="pause" aria-hidden="true"></i> Pause all
+                                </button>
+                                <button id="btn-resume-all" class="download-action-option" type="button" title="Resume all paused downloads">
+                                    <i data-lucide="play" aria-hidden="true"></i> Resume paused
+                                </button>
+                                <button id="btn-retry-failed" class="download-action-option" type="button" title="Retry all failed downloads">
+                                    <i data-lucide="refresh-cw" aria-hidden="true"></i> Retry failed
+                                </button>
+                            </div>
+                        </div>
+                        <div id="downloads-search" class="downloads-search">
+                            <button id="btn-toggle-download-search" class="download-tool-button" type="button"
+                                aria-label="Search downloads" aria-expanded="false" aria-controls="downloads-search-input"
+                                title="Search downloads">
+                                <i data-lucide="search" aria-hidden="true"></i>
+                            </button>
+                            <input id="downloads-search-input" type="search" placeholder="Search downloads..."
+                                aria-label="Search by file name, link, or error" autocomplete="off" tabindex="-1">
+                        </div>
+                    </div>
+                    </div>
                     <div class="filter-sort-bar"
                         style="display: flex; gap: 12px; margin-top: 16px; align-items: center;">
-                        <button class="filter-btn active" data-filter="all">All</button>
-                        <button class="filter-btn" data-filter="downloading">Active</button>
-                        <button class="filter-btn" data-filter="completed">Completed</button>
-                        <button class="filter-btn" data-filter="error">Errors</button>
+                        <button class="filter-btn active" type="button" data-filter="all">All</button>
+                        <button class="filter-btn" type="button" data-filter="downloading">Active</button>
+                        <button class="filter-btn" type="button" data-filter="completed">Completed</button>
+                        <button class="filter-btn" type="button" data-filter="error">Errors</button>
                         <div style="flex: 1;"></div>
                         <select id="sort-select" class="sort-select">
                             <option value="date-desc">Newest First</option>
@@ -129,7 +159,7 @@
                             <option value="speed-desc">Fastest Speed</option>
                             <option value="name-asc">Name (A-Z)</option>
                         </select>
-                        <button id="btn-clear-completed" class="filter-btn" style="color: var(--danger-color); border-color: rgba(239, 68, 68, 0.2);" title="Clear Completed Downloads">
+                        <button id="btn-clear-completed" type="button" class="filter-btn" style="color: var(--danger-color); border-color: rgba(239, 68, 68, 0.2);" title="Clear Completed Downloads">
                             <i data-lucide="trash-2" style="width: 14px; height: 14px; margin-right: 4px;"></i> Clear Completed
                         </button>
                     </div>
@@ -156,8 +186,70 @@
                     </div>
                 </div>
 
+                <!-- Update Download Link Modal (تحديث رابط التحميل) -->
+                <div id="update-url-modal" class="modal-overlay" style="display: none; z-index: 10001;">
+                    <div class="modal-content" style="max-width: 520px; width: 90%; background: var(--bg-surface, #1e293b); border-radius: 14px; border: 1px solid var(--border-color, rgba(255,255,255,0.1)); box-shadow: 0 20px 40px rgba(0,0,0,0.5); padding: 24px;">
+                        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 14px;">
+                            <div style="width: 40px; height: 40px; border-radius: 10px; background: rgba(59, 130, 246, 0.15); display: flex; align-items: center; justify-content: center; color: #3b82f6;">
+                                <i data-lucide="link-2" style="width: 22px; height: 22px;"></i>
+                            </div>
+                            <div>
+                                <h3 style="margin: 0; font-size: 17px; font-weight: 600; color: var(--text-primary, #f8fafc);">تحديث رابط التحميل (Update Link)</h3>
+                                <p style="margin: 2px 0 0; font-size: 13px; color: var(--text-muted, #94a3b8);">استئناف التحميل برابط جديد دون فقدان البيانات السابقة</p>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(0,0,0,0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; border: 1px solid rgba(255,255,255,0.05);">
+                            <div style="font-size: 12px; color: var(--text-muted, #94a3b8); margin-bottom: 4px;">الملف:</div>
+                            <div id="update-url-filename" style="font-size: 13px; font-weight: 500; color: var(--text-primary, #f1f5f9); word-break: break-all;">--</div>
+                        </div>
+
+                        <div style="margin-bottom: 18px;">
+                            <label style="display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary, #cbd5e1); margin-bottom: 6px;">الرابط الجديد (Fresh Download Link):</label>
+                            <div style="position: relative; display: flex; align-items: center;">
+                                <input type="url" id="input-new-download-url" placeholder="الصق الرابط الجديد هنا https://..."
+                                    style="width: 100%; padding: 10px 40px 10px 12px; border-radius: 8px; background: var(--bg-dark, #0f172a); color: white; border: 1px solid var(--border-color, rgba(255,255,255,0.15)); font-size: 13px; outline: none; transition: border-color 0.2s;" />
+                                <button id="btn-paste-new-url" type="button" title="لصق من الحافظة (Paste)" style="position: absolute; right: 8px; background: none; border: none; color: #3b82f6; cursor: pointer; padding: 4px; display: flex; align-items: center;">
+                                    <i data-lucide="clipboard" style="width: 18px; height: 18px;"></i>
+                                </button>
+                            </div>
+                            <span id="update-url-error" style="display: none; color: #ef4444; font-size: 12px; margin-top: 6px;"></span>
+                        </div>
+
+                        <div class="modal-actions" style="display: flex; gap: 10px; justify-content: flex-end;">
+                            <button id="btn-cancel-update-url" class="btn-secondary" style="padding: 9px 18px; border-radius: 8px; cursor: pointer;">إلغاء</button>
+                            <button id="btn-confirm-update-url" class="btn-primary" style="padding: 9px 20px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px; background: #3b82f6; color: white; font-weight: 500;">
+                                <i data-lucide="play" style="width: 15px; height: 15px;"></i>
+                                <span>تحديث واستئناف</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="downloads-layout-wrapper" style="display: flex; flex: 1; overflow: hidden;">
                     <div class="downloads-area" style="flex: 1; overflow-y: auto;">
+                        <section class="download-overview" aria-label="Download overview">
+                            <article class="overview-stat">
+                                <span class="overview-label">Active</span>
+                                <strong id="overview-active">0</strong>
+                                <span class="overview-note" id="overview-queued">0 waiting in queue</span>
+                            </article>
+                            <article class="overview-stat">
+                                <span class="overview-label">Completed</span>
+                                <strong id="overview-completed">0</strong>
+                                <span class="overview-note">files in your history</span>
+                            </article>
+                            <article class="overview-stat">
+                                <span class="overview-label">Transferred</span>
+                                <strong id="overview-transferred">0 B</strong>
+                                <span class="overview-note">across all downloads</span>
+                            </article>
+                            <article class="overview-stat overview-stat-speed">
+                                <span class="overview-label">Current speed</span>
+                                <strong id="overview-speed">0 B/s</strong>
+                                <span class="overview-note">combined active speed</span>
+                            </article>
+                        </section>
                         <div id="downloads-list" class="downloads-list">
                             <div id="downloads-empty-state" class="downloads-empty-state">
                                 <div class="empty-state-icon"><i data-lucide="download-cloud"></i></div>
@@ -262,10 +354,7 @@
                         <!-- Footer Status -->
                         <div class="widget-footer"
                             style="padding: 16px 24px; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
-                            <div
-                                style="display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #fbbf24;">
-                                <i data-lucide="crown" style="width: 14px; height: 14px;"></i> Premium Active
-                            </div>
+                            <span style="font-size: 12px; color: var(--text-muted);">Appearance</span>
                             <div style="display: flex; gap: 8px;">
                                 <button id="btn-theme-light" class="btn-icon"
                                     style="width: 28px; height: 28px; border-radius: 6px;"><i data-lucide="sun"
@@ -329,23 +418,23 @@
                     <div class="settings-nav-tabs" role="tablist" aria-label="أقسام الإعدادات">
                         <button id="settings-tab-general" class="settings-tab-btn active" data-settings-tab="general"
                             role="tab" aria-selected="true" aria-controls="tab-general" tabindex="0">
-                            <i data-lucide="settings"></i> start
+                            <i data-lucide="settings"></i> عام
                         </button>
                         <button id="settings-tab-appearance" class="settings-tab-btn" data-settings-tab="appearance"
                             role="tab" aria-selected="false" aria-controls="tab-appearance" tabindex="-1">
-                            <i data-lucide="palette"></i> theme
+                            <i data-lucide="palette"></i> المظهر
                         </button>
                         <button id="settings-tab-engine" class="settings-tab-btn" data-settings-tab="engine" role="tab"
                             aria-selected="false" aria-controls="tab-engine" tabindex="-1">
-                            <i data-lucide="zap"></i> engine
+                            <i data-lucide="zap"></i> التحميل
                         </button>
                         <button id="settings-tab-extension" class="settings-tab-btn" data-settings-tab="extension"
                             role="tab" aria-selected="false" aria-controls="tab-extension" tabindex="-1">
-                            <i data-lucide="puzzle"></i> add in browser
+                            <i data-lucide="puzzle"></i> إضافة المتصفح
                         </button>
                         <button id="settings-tab-about" class="settings-tab-btn" data-settings-tab="about" role="tab"
                             aria-selected="false" aria-controls="tab-about" tabindex="-1">
-                            <i data-lucide="info"></i> about
+                            <i data-lucide="info"></i> حول التطبيق
                         </button>
                     </div>
 
@@ -382,7 +471,7 @@
                                 <div class="settings-card-icon"><i data-lucide="cpu"></i></div>
                                 <div class="settings-card-title">
                                     <h3>سلوك النظام</h3>
-                                    <p>التشغيل التلقائي، الإشعارات، والتقاط الروابط</p>
+                                    <p>خيارات بدء التطبيق وطريقة إغلاقه</p>
                                 </div>
                             </div>
 
@@ -401,6 +490,28 @@
 
                             <div class="setting-item-row">
                                 <div class="setting-item-info">
+                                    <span class="setting-item-title">إبقاء التطبيق في منطقة الإشعارات عند الإغلاق</span>
+                                    <span class="setting-item-desc">إيقاف الخيار ينهي التطبيق ومحرك التحميل؛ التنزيلات الجارية ستتوقف</span>
+                                </div>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="checkbox-close-to-tray" checked
+                                        aria-label="إبقاء التطبيق في منطقة الإشعارات عند الإغلاق">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Automation and notification preferences -->
+                        <div class="settings-card settings-automation-card">
+                            <div class="settings-card-header">
+                                <div class="settings-card-icon"><i data-lucide="sparkles"></i></div>
+                                <div class="settings-card-title">
+                                    <h3>الأتمتة والإشعارات</h3>
+                                    <p>التقاط الروابط وترتيب الملفات والتنبيه عند اكتمال التنزيل</p>
+                                </div>
+                            </div>
+                            <div class="setting-item-row">
+                                <div class="setting-item-info">
                                     <span class="setting-item-title">مراقب الحافظة الذكي (لصق ذكي)</span>
                                     <span class="setting-item-desc">يكتشف الروابط المنسوخة من يوتيوب وتيك توك وفيسبوك
                                         وإنستجرام تلقائياً</span>
@@ -415,8 +526,8 @@
                             <div class="setting-item-row">
                                 <div class="setting-item-info">
                                     <span class="setting-item-title">تنظيم الملفات في مجلدات حسب النوع</span>
-                                    <span class="setting-item-desc">يرتب الملفات المكتملة تلقائياً في مجلدات: فيديوهات،
-                                        صوتيات، مستندات، وأرشيفات</span>
+                                    <span class="setting-item-desc">ينقل الملفات المكتملة تلقائياً إلى مجلدات الفيديو والصوت
+                                        والمستندات والأرشيفات داخل مجلد التنزيلات</span>
                                 </div>
                                 <label class="toggle-switch">
                                     <input type="checkbox" id="checkbox-auto-categorize" checked
@@ -440,7 +551,7 @@
                             <div class="setting-item-row">
                                 <div class="setting-item-info">
                                     <span class="setting-item-title">نغمة صوت عند اكتمال التحميل</span>
-                                    <span class="setting-item-desc">يشغّل صوت نغمة حلوة لما التحميل يخلص</span>
+                                    <span class="setting-item-desc">يشغّل نغمة قصيرة عند اكتمال أي تحميل</span>
                                 </div>
                                 <div style="display: flex; align-items: center; gap: 10px;">
                                     <button id="btn-test-sound" class="btn-settings-action"
@@ -464,6 +575,18 @@
                                 <label class="toggle-switch">
                                     <input type="checkbox" id="checkbox-auto-resume" checked
                                         aria-label="استئناف التحميلات تلقائياً">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+
+                            <div class="setting-item-row">
+                                <div class="setting-item-info">
+                                    <span class="setting-item-title">فتح مكان الملف بعد اكتمال التحميل</span>
+                                    <span class="setting-item-desc">يفتح مستكشف الملفات ويحدد الملف الذي انتهى تنزيله؛ عطّله لو كنت تنزّل ملفات كثيرة معًا</span>
+                                </div>
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="checkbox-open-completed-folder"
+                                        aria-label="فتح مكان الملف بعد اكتمال التحميل">
                                     <span class="toggle-slider"></span>
                                 </label>
                             </div>
@@ -733,12 +856,15 @@
                                 إضافة المتصفح بتتواصل مباشرة مع محرك ليدو المحلي على بورت 8000. الإضافة موجودة مع
                                 البرنامج ومش محتاج إنترنت عشان تركّبها!
                             </p>
+                            <p class="settings-desc" style="margin-bottom: 14px; color: var(--text-muted);">
+                                المتصفح يمنع التثبيت الصامت للإضافات المحلية؛ الزر يفتح صفحة الإضافات ومجلدها، ثم اختر Load unpacked. فحص الاتصال يتحقق من ملفات الإضافة والمحرك المحلي، ولا يستطيع معرفة هل فعّلت الإضافة داخل المتصفح.
+                            </p>
 
                             <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
     <button id="btn-install-extension" class="btn-primary"
         style="padding: 14px 24px; font-weight: 700; display: inline-flex; align-items: center; gap: 10px; flex: 1; justify-content: center; font-size: 15px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 16px rgba(16, 185, 129, 0.4);">
         <i data-lucide="zap"></i>
-        تثبيت الإضافة في المتصفح فوراً (نقرة واحدة)
+        إعداد الإضافة في Chrome أو Edge
     </button>
 </div>
 <div style="display: flex; gap: 12px; flex-wrap: wrap;">
@@ -750,7 +876,7 @@
                                 <button id="btn-test-extension-conn" class="btn-settings-action"
                                     style="padding: 12px 20px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px;">
                                     <i data-lucide="radio"></i>
-                                    فحص الاتصال بالمتصفح
+                                    فحص الإضافة والمحرك
                                 </button>
                             </div>
 
@@ -907,8 +1033,19 @@
             <div id="view-stats" class="view-section">
                 <header class="top-bar">
                     <h2 style="font-weight: 700; font-size: 24px;">📊 Statistics & Data Management</h2>
+                    <button id="btn-refresh-stats" class="stats-refresh-btn" type="button" title="Refresh statistics">
+                        <i data-lucide="refresh-cw"></i><span>Refresh</span>
+                    </button>
                 </header>
-                <div class="stats-area" style="padding: 32px; overflow-y: auto; height: 100%;">
+                <div class="stats-area stats-dashboard">
+                    <div class="stats-intro">
+                        <div>
+                            <span class="stats-eyebrow">YOUR DOWNLOAD LIBRARY</span>
+                            <h3>At a glance</h3>
+                            <p>Track your downloads and keep the app’s history tidy.</p>
+                        </div>
+                        <div class="stats-live-indicator"><span></span>Updated when you open this page</div>
+                    </div>
                     <!-- Stats Summary Cards -->
                     <div class="stats-grid">
                         <div class="stat-card stat-card-accent">
@@ -965,34 +1102,73 @@
                                 <span class="stat-value" id="stat-audios" style="color: #fbbf24;">0</span>
                             </div>
                         </div>
+                        <div class="stat-card">
+                            <div class="stat-icon-wrap" style="background: rgba(156, 163, 175, 0.15);">
+                                <i data-lucide="file" style="color: #9ca3af; width: 28px; height: 28px;"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">Other Files</span>
+                                <span class="stat-value" id="stat-others" style="color: #9ca3af;">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon-wrap" style="background: rgba(14, 165, 233, 0.15);">
+                                <i data-lucide="percent" style="color: #0ea5e9; width: 28px; height: 28px;"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">Success Rate</span>
+                                <span class="stat-value" id="stat-success-rate" style="color: #0ea5e9;">0%</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon-wrap" style="background: rgba(20, 184, 166, 0.15);">
+                                <i data-lucide="calendar-days" style="color: #2dd4bf; width: 28px; height: 28px;"></i>
+                            </div>
+                            <div class="stat-info">
+                                <span class="stat-label">Last 7 Days</span>
+                                <span class="stat-value" id="stat-last-seven-days" style="color: #2dd4bf;">0</span>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Chart + Actions Row -->
-                    <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-top: 24px;">
-                        <div class="stat-card" style="flex: 1.5; min-width: 320px; padding: 28px;">
-                            <h3
-                                style="margin-bottom: 16px; font-size: 16px; font-weight: 600; color: var(--text-main);">
-                                Download Distribution</h3>
-                            <canvas id="downloadsChart" style="max-width: 100%; max-height: 280px;"></canvas>
-                        </div>
-                        <div class="stat-card"
-                            style="flex: 1; min-width: 260px; padding: 28px; display: flex; flex-direction: column; gap: 16px;">
-                            <h3 style="margin-bottom: 8px; font-size: 16px; font-weight: 600; color: var(--text-main);">
-                                Data Management</h3>
-                            <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">Manage your download
-                                history and clean up temporary or orphaned files.</p>
-                            <button id="btn-cleanup-temps" class="btn-settings-action"
-                                style="width: 100%; justify-content: center;">
-                                <i data-lucide="trash-2"></i>
-                                Clean Temp Files
-                            </button>
-                            <button id="btn-clear-history" class="btn-settings-danger"
-                                style="width: 100%; justify-content: center; margin-top: auto;">
-                                <i data-lucide="database" style="width: 16px; height: 16px;"></i>
-                                Clear All History
-                            </button>
-
-                        </div>
+                    <div class="stats-lower-grid">
+                        <section class="stat-card stats-chart-card">
+                            <div class="stats-section-heading">
+                                <div class="stats-heading-icon"><i data-lucide="chart-pie"></i></div>
+                                <div><h3>Download Distribution</h3><p>File types in your download history</p></div>
+                            </div>
+                            <div class="stats-chart-wrap"><canvas id="downloadsChart"></canvas></div>
+                        </section>
+                        <section class="stat-card stats-management-card">
+                            <div class="stats-section-heading">
+                                <div class="stats-heading-icon"><i data-lucide="database"></i></div>
+                                <div><h3>Data Management</h3><p>Review what will change before cleaning.</p></div>
+                            </div>
+                            <div class="cleanup-preview-panel">
+                                <div class="cleanup-preview-top">
+                                    <div><span class="cleanup-preview-label">TEMP FILES FOUND</span><strong id="cleanup-preview-count">Checking…</strong></div>
+                                    <span id="cleanup-preview-size" class="cleanup-preview-size">—</span>
+                                </div>
+                                <p id="cleanup-preview-note">Only incomplete download fragments are included. Active downloads are protected.</p>
+                                <ul id="cleanup-preview-files" class="cleanup-preview-files" aria-label="Temporary files preview"></ul>
+                                <button id="btn-cleanup-temps" class="btn-settings-action stats-action-primary" type="button" disabled>
+                                    <i data-lucide="sparkles"></i><span>Clean temporary files</span>
+                                </button>
+                            </div>
+                            <div class="stats-management-actions">
+                                <button id="btn-export-history" class="btn-settings-action stats-action-secondary" type="button">
+                                    <i data-lucide="file-down"></i><span>Export history (CSV)</span>
+                                </button>
+                                <button id="btn-clear-completed-history" class="btn-settings-action stats-action-secondary" type="button">
+                                    <i data-lucide="list-x"></i><span>Clear completed history</span>
+                                </button>
+                                <button id="btn-clear-history" class="btn-settings-danger stats-action-secondary" type="button">
+                                    <i data-lucide="trash-2"></i><span>Clear all history</span>
+                                </button>
+                            </div>
+                            <div class="stats-data-note"><i data-lucide="info"></i><span>History actions remove records from the app. Your downloaded files stay in their folders.</span></div>
+                        </section>
                     </div>
                 </div>
             </div>

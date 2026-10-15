@@ -312,8 +312,36 @@
                         console.debug('Check update listener error:', err);
                     });
             }
+
+            // Listen for Maintenance Mode
+            if (!window.unsubscribeStatus) {
+                window.unsubscribeStatus = window.firebaseApp.db.collection('app_config').doc('status')
+                    .onSnapshot((docRef) => {
+                        if (docRef.exists) {
+                            const data = docRef.data();
+                            window.appMaintenanceMode = data.maintenance || false;
+                            window.appMaintenanceMessage = data.message || 'نحن في صيانة حالياً، يرجى المحاولة لاحقاً.';
+                            
+                            if (window.appMaintenanceMode) {
+                                if (typeof showToast === 'function') showToast(window.appMaintenanceMessage, '#ef4444');
+                            }
+                        }
+                    });
+            }
+
+            // Listen for Feature Toggles
+            if (!window.unsubscribeFeatures) {
+                window.unsubscribeFeatures = window.firebaseApp.db.collection('app_config').doc('features')
+                    .onSnapshot((docRef) => {
+                        if (docRef.exists) {
+                            window.appFeatureToggles = docRef.data();
+                        } else {
+                            window.appFeatureToggles = {};
+                        }
+                    });
+            }
         } catch (err) {
-            console.debug('Firebase update check error:', err);
+            console.debug('Firebase config check error:', err);
         }
     }
 

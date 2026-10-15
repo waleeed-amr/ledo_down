@@ -102,6 +102,12 @@ html, body {
     animation: none;
 }
 
+.status-pulse.offline {
+    background: #ef4444;
+    box-shadow: 0 0 10px #ef4444;
+    animation: none;
+}
+
 .header-title {
     font-size: 11.5px;
     font-weight: 700;
@@ -124,6 +130,19 @@ html, body {
     gap: 4px;
     -webkit-app-region: no-drag;
 }
+
+.btn-bulk {
+    border: 1px solid rgba(56, 189, 248, 0.25);
+    border-radius: 5px;
+    padding: 4px 7px;
+    background: rgba(56, 189, 248, 0.1);
+    color: var(--accent);
+    font-size: 9px;
+    font-weight: 700;
+    cursor: pointer;
+}
+.btn-bulk:hover { background: rgba(56, 189, 248, 0.2); }
+.btn-bulk:disabled { opacity: 0.55; cursor: wait; }
 
 .btn-icon-hdr {
     background: transparent;
@@ -226,6 +245,20 @@ html, body {
     gap: 4px;
 }
 
+.dl-state {
+    max-width: 86px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+    font-size: 9px;
+    font-weight: 700;
+}
+.dl-state.downloading, .dl-state.processing { color: var(--accent); }
+.dl-state.starting { color: var(--warning); }
+.dl-state.paused { color: var(--warning); }
+.dl-state.error { color: var(--danger); }
+
 .dl-btn {
     background: rgba(255, 255, 255, 0.06);
     border: 1px solid rgba(255, 255, 255, 0.06);
@@ -267,6 +300,16 @@ html, body {
     transition: width 0.1s linear;
     position: relative;
     box-shadow: 0 0 8px var(--accent-glow);
+}
+
+.progress-fill.is-indeterminate {
+    width: 32%;
+    animation: mini-progress-indeterminate 1.25s ease-in-out infinite alternate;
+}
+
+@keyframes mini-progress-indeterminate {
+    from { transform: translateX(-15%); }
+    to { transform: translateX(205%); }
 }
 
 .progress-fill::after {

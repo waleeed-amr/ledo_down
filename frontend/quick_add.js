@@ -38,6 +38,7 @@ const btnBrowse = document.getElementById('btn-browse');
 const btnCopyUrl = document.getElementById('btn-copy-url');
 const btnPasteUrl = document.getElementById('btn-paste-url');
 const btnAnalyzeUrl = document.getElementById('btn-analyze-url');
+const btnSkipSniff = document.getElementById('btn-skip-sniff');
 
 let currentMetadata = {
     url: '',
@@ -51,6 +52,7 @@ let currentMetadata = {
 };
 let sniffTimer = null;
 let sniffRequestId = 0;
+let sniffAbortController = null;
 let userSelectedSavePath = false;
 
 const CATEGORIES = {
@@ -156,22 +158,37 @@ function getCategorySaveDir(category) {
         return savedCustomPaths[category];
     }
 
-    const downloadsDir = path.join(os.homedir(), 'Downloads');
+    // Read user settings for base download path and autoCategorize
+    let settings = {};
+    try { settings = JSON.parse(localStorage.getItem('ledo_settings') || '{}'); } catch(e) {}
+    
+    const baseDir = settings.defaultSavePath || path.join(os.homedir(), 'Downloads', 'Ledo Downloader');
+    const autoCategorize = settings.autoCategorize !== false; // default true
+
+    // If auto-categorize is disabled, always return base dir
+    if (!autoCategorize) {
+        if (!fs.existsSync(baseDir)) {
+            try { fs.mkdirSync(baseDir, { recursive: true }); } catch(e){}
+        }
+        return baseDir;
+    }
+
+    // Category folder names aligned with backend (downloader.py CATEGORIES)
     const categoryFolders = {
         'Programs': 'Programs',
-        'Compressed': 'Compressed',
-        'Video': 'Video',
-        'Audio': 'Music',
+        'Compressed': 'Archives',
+        'Video': 'Videos',
+        'Audio': 'Audio',
         'Documents': 'Documents',
-        'General': 'Ledo Downloader'
+        'General': ''
     };
-    const folder = categoryFolders[category] || 'Ledo Downloader';
-    const basePath = path.join(downloadsDir, folder);
+    const folder = categoryFolders[category] || '';
+    const targetPath = folder ? path.join(baseDir, folder) : baseDir;
     
-    if (!fs.existsSync(basePath)) {
-        try { fs.mkdirSync(basePath, { recursive: true }); } catch(e){}
+    if (!fs.existsSync(targetPath)) {
+        try { fs.mkdirSync(targetPath, { recursive: true }); } catch(e){}
     }
-    return basePath;
+    return targetPath;
 }
 
 function saveCategoryPath(category, dirPath) {
@@ -300,6 +317,16 @@ function setAnalyzing(isAnalyzing) {
     if (btnPasteUrl) btnPasteUrl.disabled = isAnalyzing;
 }
 
+function skipInfoFetch() {
+    ++sniffRequestId;
+    clearTimeout(sniffTimer);
+    if (sniffAbortController) {
+        sniffAbortController.abort();
+        sniffAbortController = null;
+    }
+    setAnalyzing(false);
+}
+
 async function analyzeUrl(value = urlInput.value) {
     const url = normaliseUrl(value);
     if (!url) {
@@ -308,7 +335,10 @@ async function analyzeUrl(value = urlInput.value) {
         return false;
     }
 
+    if (sniffAbortController) sniffAbortController.abort();
     const requestId = ++sniffRequestId;
+    sniffAbortController = new AbortController();
+    const abortController = sniffAbortController;
     errorBanner.style.display = 'none';
     userSelectedSavePath = false;
     currentMetadata = {
@@ -330,7 +360,7 @@ async function analyzeUrl(value = urlInput.value) {
             cookies: currentMetadata.cookies || null,
             user_agent: currentMetadata.user_agent || null,
             referer: currentMetadata.referer || null
-        }, { timeout: 15000 });
+        }, { timeout: 15000, signal: abortController.signal });
         if (requestId !== sniffRequestId) return false;
         const info = res.data || {};
         if (info.title && info.title !== 'Unknown File') currentMetadata.filename = info.title;
@@ -349,7 +379,10 @@ async function analyzeUrl(value = urlInput.value) {
         }
         return false;
     } finally {
-        if (requestId === sniffRequestId) setAnalyzing(false);
+        if (requestId === sniffRequestId) {
+            sniffAbortController = null;
+            setAnalyzing(false);
+        }
     }
 }
 
@@ -614,6 +647,7 @@ async function handleStartDownload(isLater = false) {
 btnStartDownload.addEventListener('click', () => handleStartDownload(false));
 btnDownloadLater.addEventListener('click', () => handleStartDownload(true));
 btnRetry.addEventListener('click', () => handleStartDownload(false));
+btnSkipSniff.addEventListener('click', skipInfoFetch);
 
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
@@ -626,6 +660,9 @@ document.addEventListener('keydown', (e) => {
 
 // Exposed function called by main.js
 window.updateQuickAddInfo = async function(metadata) {
+    if (sniffAbortController) sniffAbortController.abort();
+    const requestId = ++sniffRequestId;
+    sniffAbortController = null;
     // Retrigger popup animation for a snappy feel
     windowContainer.style.animation = 'none';
     windowContainer.offsetHeight;
@@ -643,6 +680,7 @@ window.updateQuickAddInfo = async function(metadata) {
         mime_type: metadata.mime_type || '',
         cookies: metadata.cookies || null,
         user_agent: metadata.user_agent || null,
+        referer: metadata.referer || null,
         type: 'unknown'
     };
     userSelectedSavePath = false;
@@ -665,6 +703,8 @@ window.updateQuickAddInfo = async function(metadata) {
     // 4. Otherwise, sniff the URL from backend
     updateUI();
     sniffingLoader.style.display = 'flex';
+    sniffAbortController = new AbortController();
+    const abortController = sniffAbortController;
     
     try {
         const res = await axios.post(`${API_URL}/sniff`, { 
@@ -672,7 +712,8 @@ window.updateQuickAddInfo = async function(metadata) {
             cookies: currentMetadata.cookies || null,
             user_agent: currentMetadata.user_agent || null,
             referer: currentMetadata.referer || null
-        }, { timeout: 10000 });
+        }, { timeout: 30000, signal: abortController.signal });
+        if (requestId !== sniffRequestId) return;
         const info = res.data;
         if (info && info.title && info.title !== 'Unknown File') {
             currentMetadata.filename = info.title;
@@ -681,10 +722,15 @@ window.updateQuickAddInfo = async function(metadata) {
             currentMetadata.type = info.type || 'file';
         }
     } catch (e) {
-        console.warn('Sniff failed or timed out:', e);
+        if (requestId === sniffRequestId) {
+            console.warn('Sniff failed or timed out:', e);
+        }
     } finally {
-        sniffingLoader.style.display = 'none';
-        updateUI();
+        if (requestId === sniffRequestId) {
+            sniffAbortController = null;
+            sniffingLoader.style.display = 'none';
+            updateUI();
+        }
     }
 };
 
