@@ -1,10 +1,26 @@
 {
   "manifest_version": 3,
   "name": "Ledo Downloader Integration",
-  "version": "3.9.2010",
-  "description": "Send download links directly to Ledo Downloader Desktop App.",
-  "permissions": ["contextMenus", "activeTab", "scripting", "cookies", "downloads", "storage"],
-  "host_permissions": ["<all_urls>", "http://127.0.0.1:8000/*", "http://localhost:8000/*"],
+  "version": "4.1.3",
+  "description": "Download media, block ads on YouTube & social media, and intercept downloads with Ledo.",
+  "permissions": [
+    "contextMenus",
+    "activeTab",
+    "scripting",
+    "cookies",
+    "downloads",
+    "storage",
+    "alarms",
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "webRequest",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:8000/*",
+    "http://localhost:8000/*"
+  ],
   "icons": {
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
@@ -22,14 +38,70 @@
   },
   "content_scripts": [
     {
+      "matches": ["*://*.youtube.com/*", "*://youtu.be/*", "*://*.youtube-nocookie.com/*"],
+      "js": ["yt_main_world.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*", "*://music.youtube.com/*", "*://youtu.be/*"],
+      "js": ["youtube_saver.js"],
+      "run_at": "document_idle"
+    },
+    {
       "matches": ["<all_urls>"],
-      "js": ["content_script.js"]
+      "exclude_matches": ["*://chatgpt.com/*", "*://*.chatgpt.com/*"],
+      "js": ["adblock_engine.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "exclude_matches": ["*://chatgpt.com/*", "*://*.chatgpt.com/*"],
+      "js": ["badger/badger_content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "exclude_matches": ["*://chatgpt.com/*", "*://*.chatgpt.com/*"],
+      "js": ["content_script.js"],
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["icons/icon48.png", "icons/icon128.png"],
+      "resources": [
+        "icons/icon48.png",
+        "icons/icon128.png",
+        "yt_main_world.js",
+        "badger/surrogates/*"
+      ],
       "matches": ["<all_urls>"]
     }
-  ]
+  ],
+  "commands": {
+    "download-current-page": {
+      "suggested_key": {
+        "default": "Alt+Shift+D"
+      },
+      "description": "Download the current page with Ledo"
+    },
+    "download-current-audio": {
+      "suggested_key": {
+        "default": "Alt+Shift+A"
+      },
+      "description": "Download audio from the current page with Ledo"
+    }
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ledo_adblock",
+        "enabled": true,
+        "path": "adblock_rules.json"
+      }
+    ]
+  }
 }

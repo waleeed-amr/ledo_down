@@ -1,7 +1,65 @@
 (function() {
+    // Avoid injecting downloader UI or DOM hooks into the ChatGPT application.
+    if (location.hostname === 'chatgpt.com' || location.hostname.endsWith('.chatgpt.com')) return;
+
     let hoveredVideo = null;
     let hideTimeout = null;
     const ignoredVideos = new WeakSet();
+    let floatingEnabled = true;
+    const cosmeticStyle = document.createElement('style');
+    cosmeticStyle.dataset.ledoAdBlock = 'cosmetic';
+    const hostname = window.location.hostname.toLowerCase();
+
+    function domainMatches(domain) {
+        return hostname === domain || hostname.endsWith(`.${domain}`);
+    }
+
+    function refreshCosmeticFilters() {
+        chrome.storage.local.get([
+            'adblock_enabled', 'adblock_cosmetic_enabled',
+            'adblock_allowlist', 'adblock_cosmetic_filters'
+        ], settings => {
+            const isAllowed = Array.isArray(settings.adblock_allowlist)
+                && settings.adblock_allowlist.some(domainMatches);
+            if (settings.adblock_enabled === false || settings.adblock_cosmetic_enabled === false || isAllowed) {
+                cosmeticStyle.textContent = '';
+                return;
+            }
+
+            const filters = Array.isArray(settings.adblock_cosmetic_filters) ? settings.adblock_cosmetic_filters : [];
+            const matchesPage = filter => {
+                const matchesIncluded = !filter.domains?.length || filter.domains.some(domainMatches);
+                const matchesExcluded = filter.excludedDomains?.some(domainMatches);
+                return matchesIncluded && !matchesExcluded;
+            };
+            const exceptions = new Set(filters.filter(filter => filter.exception && matchesPage(filter)).map(filter => filter.selector));
+            const selectors = [...new Set(filters
+                .filter(filter => !filter.exception && matchesPage(filter) && !exceptions.has(filter.selector))
+                .map(filter => filter.selector))];
+            cosmeticStyle.textContent = selectors.map(selector => `${selector} { display: none !important; }`).join('\n');
+            if (cosmeticStyle.textContent && !cosmeticStyle.isConnected) {
+                (document.head || document.documentElement).appendChild(cosmeticStyle);
+            }
+        });
+    }
+
+    refreshCosmeticFilters();
+    chrome.storage.local.get(['floating_enabled'], result => {
+        floatingEnabled = result.floating_enabled !== false;
+    });
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== 'local') return;
+        if (changes.floating_enabled) {
+            floatingEnabled = changes.floating_enabled.newValue !== false;
+            if (!floatingEnabled) {
+                container.style.display = 'none';
+                dropdown.style.display = 'none';
+                hoveredVideo = null;
+            }
+        }
+        if (changes.adblock_enabled || changes.adblock_cosmetic_enabled
+            || changes.adblock_allowlist || changes.adblock_cosmetic_filters) refreshCosmeticFilters();
+    });
 
     const container = document.createElement('div');
     container.id = 'ledo-floating-container';
@@ -168,7 +226,7 @@
             isHoveringMedia = (e.clientX >= vRect.left && e.clientX <= vRect.right && e.clientY >= vRect.top && e.clientY <= vRect.bottom);
         }
 
-        if (!isHoveringBtn && !isHoveringMedia && now - lastMouseMove > 150) {
+        if (floatingEnabled && !isHoveringBtn && !isHoveringMedia && now - lastMouseMove > 150) {
             lastMouseMove = now;
             // Check all elements under the cursor (bypasses transparent overlays)
             const elements = document.elementsFromPoint(e.clientX, e.clientY);
@@ -225,7 +283,7 @@
         }
     });
 
-    function triggerDownload(quality) {
+    function triggerDownload(quality, isYtDlp = true) {
         let targetUrl = window.location.href;
         if (hoveredVideo) {
             if (hoveredVideo.tagName.toUpperCase() === 'A' && hoveredVideo.href) {
@@ -273,7 +331,7 @@
 
     optVideo.addEventListener('click', () => triggerDownload("best"));
     optAudio.addEventListener('click', () => triggerDownload("audio"));
-    optFile.addEventListener('click', () => triggerDownload("best"));
+    optFile.addEventListener('click', () => triggerDownload("best", false));
     
     optManual.addEventListener('click', () => {
         let targetUrl = window.location.href;
@@ -294,7 +352,7 @@
         }
 
         try {
-            chrome.runtime.sendMessage({ action: "downloadUrl", url: targetUrl }, (response) => {
+            chrome.runtime.sendMessage({ action: "downloadUrl", url: targetUrl, referer: window.location.href }, (response) => {
                 if (chrome.runtime.lastError) {
                     showToast("Extension updated. Please refresh the page.", true);
                     mainBtn.innerHTML = originalHtml;
@@ -350,5 +408,137 @@
                 if (toast.parentNode) toast.remove();
             }, 400);
         }, 3500);
+    }
+
+    // ========================================================================
+    //  Element Zapper Tool (أداة إزالة العناصر السريعة من الصفحة)
+    // ========================================================================
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message && message.action === 'startElementZapper') {
+            startElementZapper();
+            sendResponse({ success: true });
+            return false;
+        }
+    });
+
+    function startElementZapper() {
+        let currentTarget = null;
+
+        // Floating instruction banner at the top
+        const banner = document.createElement('div');
+        banner.id = 'ledo-zapper-banner';
+        banner.style.cssText = `
+            position: fixed !important;
+            top: 14px !important;
+            left: 50% !important;
+            transform: translateX(-50%) !important;
+            z-index: 2147483647 !important;
+            background: #0f172a !important;
+            color: #ffffff !important;
+            padding: 8px 18px !important;
+            border-radius: 30px !important;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+            font-size: 13px !important;
+            font-weight: 600 !important;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.4) !important;
+            border: 1px solid rgba(255,255,255,0.2) !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 12px !important;
+            direction: rtl !important;
+            pointer-events: auto !important;
+        `;
+        banner.innerHTML = `
+            <span>🎯 أداة الإزالة: انقر على أي إعلان أو عنصر لحذفه</span>
+            <span style="font-size:11px; background:#334155; padding:2px 8px; border-radius:12px; color:#cbd5e1; cursor:pointer;" id="ledo-zapper-cancel-btn">Esc إلغاء</span>
+        `;
+        document.documentElement.appendChild(banner);
+
+        // Highlight box
+        const highlightBox = document.createElement('div');
+        highlightBox.id = 'ledo-zapper-highlight';
+        highlightBox.style.cssText = `
+            position: absolute !important;
+            z-index: 2147483646 !important;
+            border: 2px dashed #ef4444 !important;
+            background: rgba(239, 68, 68, 0.2) !important;
+            pointer-events: none !important;
+            display: none !important;
+            transition: all 0.05s ease-out !important;
+            border-radius: 4px !important;
+        `;
+        document.documentElement.appendChild(highlightBox);
+
+        function updateHighlight(el) {
+            if (!el || el === banner || banner.contains(el) || el === highlightBox || el === document.body || el === document.documentElement) {
+                highlightBox.style.display = 'none';
+                currentTarget = null;
+                return;
+            }
+            currentTarget = el;
+            const rect = el.getBoundingClientRect();
+            highlightBox.style.display = 'block';
+            highlightBox.style.top = `${rect.top + window.scrollY}px`;
+            highlightBox.style.left = `${rect.left + window.scrollX}px`;
+            highlightBox.style.width = `${rect.width}px`;
+            highlightBox.style.height = `${rect.height}px`;
+        }
+
+        function onMouseMove(e) {
+            const el = document.elementFromPoint(e.clientX, e.clientY);
+            updateHighlight(el);
+        }
+
+        function onClick(e) {
+            if (banner.contains(e.target)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (currentTarget) {
+                const target = currentTarget;
+                cleanup();
+
+                // Quick vanish animation
+                target.style.transition = 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)';
+                target.style.transform = 'scale(0.85)';
+                target.style.opacity = '0';
+                setTimeout(() => {
+                    target.style.setProperty('display', 'none', 'important');
+                    target.style.setProperty('visibility', 'hidden', 'important');
+                }, 250);
+
+                showNotification('✔ تمت إزالة العنصر بنجاح!');
+                try {
+                    chrome.runtime.sendMessage({
+                        action: 'adblockStats',
+                        stats: { blocked: 1, skipped: 0 },
+                        hostname: location.hostname
+                    });
+                } catch(_) {}
+            }
+        }
+
+        function onKeyDown(e) {
+            if (e.key === 'Escape' || e.keyCode === 27) {
+                cleanup();
+                showNotification('تم إلغاء أداة الإزالة');
+            }
+        }
+
+        function cleanup() {
+            document.removeEventListener('mousemove', onMouseMove, true);
+            document.removeEventListener('click', onClick, true);
+            document.removeEventListener('keydown', onKeyDown, true);
+            if (banner.parentNode) banner.remove();
+            if (highlightBox.parentNode) highlightBox.remove();
+        }
+
+        document.getElementById('ledo-zapper-cancel-btn')?.addEventListener('click', (e) => {
+            e.stopPropagation();
+            cleanup();
+        });
+
+        document.addEventListener('mousemove', onMouseMove, true);
+        document.addEventListener('click', onClick, true);
+        document.addEventListener('keydown', onKeyDown, true);
     }
 })();
