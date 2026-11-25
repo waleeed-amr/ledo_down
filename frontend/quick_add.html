@@ -37,14 +37,12 @@
         <div class="main-body">
             <!-- Hero Preview Card -->
             <div class="hero-card">
-                <div class="file-icon-wrapper" id="file-icon-wrapper">
-                    <div class="file-icon-box" id="file-icon-box">
-                        <svg class="type-icon" id="hero-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
-                            <polyline points="13 2 13 9 20 9"></polyline>
-                        </svg>
-                    </div>
-                    <span class="ext-badge" id="ext-badge">FILE</span>
+                <div class="hero-mark" aria-hidden="true">
+                    <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 3v12"></path>
+                        <path d="m7 10 5 5 5-5"></path>
+                        <path d="M5 19h14"></path>
+                    </svg>
                 </div>
                 <div class="hero-details">
                     <div class="filename-row">
@@ -104,12 +102,12 @@
                         <label class="form-label" for="category-select">Category</label>
                         <div class="custom-select-wrapper">
                             <select id="category-select" class="form-select">
-                                <option value="General">📂 General</option>
-                                <option value="Programs">⚡ Programs (.exe, .msi)</option>
-                                <option value="Compressed">📦 Compressed (.zip, .rar)</option>
-                                <option value="Video">🎬 Video (.mp4, .mkv)</option>
-                                <option value="Audio">🎵 Audio (.mp3, .wav)</option>
-                                <option value="Documents">📄 Documents (.pdf, .doc)</option>
+                                <option value="General">General</option>
+                                <option value="Programs">Programs (.exe, .msi)</option>
+                                <option value="Compressed">Compressed (.zip, .rar)</option>
+                                <option value="Video">Video (.mp4, .mkv)</option>
+                                <option value="Audio">Audio (.mp3, .wav)</option>
+                                <option value="Documents">Documents (.pdf, .doc)</option>
                             </select>
                         </div>
                     </div>
@@ -119,12 +117,12 @@
                         <label class="form-label" for="quality-select">Quality / Format</label>
                         <div class="custom-select-wrapper">
                             <select id="quality-select" class="form-select">
-                                <option value="best">⚡ Best Quality (Highest)</option>
-                                <option value="1080p">🎬 1080p Full HD</option>
-                                <option value="720p">📺 720p HD</option>
-                                <option value="480p">📱 480p SD</option>
-                                <option value="360p">📱 360p Low</option>
-                                <option value="audio">🎵 Audio Only (MP3)</option>
+                                <option value="best">Best quality</option>
+                                <option value="1080p">1080p Full HD</option>
+                                <option value="720p">720p HD</option>
+                                <option value="480p">480p SD</option>
+                                <option value="360p">360p Low</option>
+                                <option value="audio">Audio only (MP3)</option>
                             </select>
                         </div>
                     </div>

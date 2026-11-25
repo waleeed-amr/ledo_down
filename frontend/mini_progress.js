@@ -1,11 +1,12 @@
-const { ipcRenderer } = require('electron');
-const path = require('path');
-const os = require('os');
+const appApi = window.electronAPI;
+const path = { extname: appApi.pathExtname, join: appApi.pathJoin };
+const os = { homedir: appApi.osHomedir };
 
 const WS_URL = 'ws://127.0.0.1:8000/ws';
 const API_URL = 'http://127.0.0.1:8000/api';
 
 let ws;
+let wsConnectPending = false;
 let hideTimeout = null;
 let wsReconnectTimer = null;
 let fallbackPollTimer = null;
@@ -122,10 +123,14 @@ function stopFallbackPolling() {
     fallbackPollTimer = null;
 }
 
-function connectWebSocket() {
-    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+async function connectWebSocket() {
+    if (wsConnectPending || (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN))) return;
     try {
-        ws = new WebSocket(WS_URL);
+        wsConnectPending = true;
+        const token = await window.electronAPI?.getLocalWebSocketToken?.();
+        wsConnectPending = false;
+        if (!token) throw new Error('Local WebSocket authentication is unavailable.');
+        ws = new WebSocket(`${WS_URL}?token=${encodeURIComponent(token)}`);
         
         ws.onopen = function() {
             miniWsReconnectDelay = 2500;
@@ -160,6 +165,7 @@ function connectWebSocket() {
             try { ws.close(); } catch(e){}
         };
     } catch(e) {
+        wsConnectPending = false;
         ws = null;
         startFallbackPolling();
         clearTimeout(wsReconnectTimer);
@@ -200,7 +206,7 @@ function handleDownloadsUpdate(allDownloads) {
 
         // Show window if not visible
         if (!isVisible) {
-            ipcRenderer.send('mini-progress-action', 'show');
+            appApi.sendMiniProgressAction('show');
             isVisible = true;
         }
     } else {
@@ -220,7 +226,7 @@ function handleDownloadsUpdate(allDownloads) {
             if (!hideTimeout && !isHovered) {
                 hideTimeout = setTimeout(() => {
                     if (!isHovered) {
-                        ipcRenderer.send('mini-progress-action', 'hide');
+                        appApi.sendMiniProgressAction('hide');
                         isVisible = false;
                         hideTimeout = null;
                         downloadsContainer.innerHTML = '';
@@ -292,7 +298,7 @@ function renderDownloads(downloads) {
                     <div class="dl-actions-row">
                         <span class="dl-state ${dl.status}">${escapeHtml(stateLabel)}</span>
                         ${dl.status === 'resolving' ? '' : isError ? `
-                        <button type="button" class="dl-btn" onclick="retryDl('${dl.id}')" title="Retry" style="color: #ef4444;">
+                        <button type="button" class="dl-btn" onclick="retryDl('${dl.id}')" title="Retry">
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                         </button>
                         ` : `
@@ -362,7 +368,7 @@ function renderDownloads(downloads) {
                     actionsRow.innerHTML = `
                         <span class="dl-state ${dl.status}">${escapeHtml(stateLabel)}</span>
                         ${isError ? `
-                        <button type="button" class="dl-btn" onclick="retryDl('${dl.id}')" title="Retry" style="color: #ef4444;">
+                        <button type="button" class="dl-btn" onclick="retryDl('${dl.id}')" title="Retry">
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>
                         </button>
                         ` : `
@@ -411,7 +417,7 @@ function renderDownloads(downloads) {
 }
 
 function adjustWindowHeight(targetHeight) {
-    ipcRenderer.send('mini-progress-resize', targetHeight);
+    appApi.sendMiniProgressResize(targetHeight);
 }
 
 btnBulkToggle.addEventListener('click', async () => {
@@ -478,7 +484,7 @@ window.cancelDl = async function(downloadId) {
 };
 
 btnOpenApp.addEventListener('click', () => {
-    ipcRenderer.send('show-main-window');
+    appApi.showMainWindow();
 });
 
 btnCollapse.addEventListener('click', () => {
@@ -504,7 +510,7 @@ miniPill.addEventListener('click', () => {
 });
 
 btnClose.addEventListener('click', () => {
-    ipcRenderer.send('mini-progress-action', 'hide');
+    appApi.sendMiniProgressAction('hide');
     isVisible = false;
     manuallyClosed = true;
     closedDownloadIds.clear();
@@ -514,7 +520,7 @@ btnClose.addEventListener('click', () => {
 
 btnOpenDefaultFolder.addEventListener('click', async () => {
     const defaultDownloads = path.join(os.homedir(), 'Downloads', 'Ledo Downloader');
-    await ipcRenderer.invoke('open-path', defaultDownloads);
+    await appApi.openDownloadsFolder(defaultDownloads);
 });
 
 // Hover handlers to prevent auto-hide when user is interacting
@@ -531,7 +537,7 @@ document.body.addEventListener('mouseleave', () => {
     if (isVisible && latestDownloads.filter(dl => ['downloading', 'starting', 'preparing', 'resolving'].includes(dl.status)).length === 0) {
         hideTimeout = setTimeout(() => {
             if (!isHovered) {
-                ipcRenderer.send('mini-progress-action', 'hide');
+                appApi.sendMiniProgressAction('hide');
                 isVisible = false;
                 hideTimeout = null;
             }

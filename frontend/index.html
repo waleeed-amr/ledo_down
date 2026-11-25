@@ -14,12 +14,30 @@
 
 <body>
 
+    <!-- Startup / Backend Loading Overlay -->
+    <div id="startup-overlay">
+        <img src="icon.png" alt="Ledo" class="startup-logo">
+        <div class="startup-title">Ledo Downloader</div>
+        <div class="startup-progress-track">
+            <div class="startup-progress-fill" id="startup-progress-fill"></div>
+        </div>
+        <div class="startup-status" id="startup-status-text">Starting download engine…</div>
+    </div>
+
     <!-- Custom Title Bar -->
     <div class="custom-titlebar" id="titlebar">
         <div class="titlebar-drag-region"></div>
         <div class="titlebar-brand">
             <img src="icon.png" alt="Ledo" class="titlebar-icon">
             <span class="titlebar-title">Ledo Downloader</span>
+            <button class="titlebar-sidebar-toggle" id="btn-toggle-nav-sidebar" type="button"
+                title="Collapse navigation" aria-label="Collapse navigation" aria-expanded="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+                    stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                    <path d="M9 4v16M15 9l-3 3 3 3"></path>
+                </svg>
+            </button>
         </div>
         <div class="titlebar-controls">
             <button class="titlebar-btn" id="btn-minimize">
@@ -49,21 +67,25 @@
                 <span>Ledo Downloader</span>
             </div>
             <nav class="nav-menu">
-                <a class="nav-item active" id="nav-downloads">
+                <a class="nav-item active" id="nav-downloads" title="Downloads">
                     <i data-lucide="list-video"></i>
-                    Downloads
+                    <span>Downloads</span>
                 </a>
-                <a class="nav-item" id="nav-settings">
+                <a class="nav-item" id="nav-settings" title="Settings">
                     <i data-lucide="settings"></i>
-                    Settings
+                    <span>Settings</span>
                 </a>
-                <a class="nav-item" id="nav-stats">
+                <a class="nav-item" id="nav-stats" title="Statistics">
                     <i data-lucide="bar-chart-2"></i>
-                    Statistics
+                    <span>Statistics</span>
                 </a>
-                <a class="nav-item" id="nav-account">
-                    <i data-lucide="user"></i>
-                    My Account
+                <a class="nav-item" id="nav-tools" title="Tools">
+                    <i data-lucide="sliders"></i>
+                    <span>Tools</span>
+                </a>
+                <a class="nav-item" id="nav-library-hub" title="مركز التنزيلات الذكي">
+                    <i data-lucide="sparkles"></i>
+                    <span>المركز الذكي</span>
                 </a>
             </nav>
         </aside>
@@ -75,7 +97,7 @@
                 <header class="top-bar">
                     <div class="add-download">
                         <div class="input-wrapper" style="flex: 1; position: relative;">
-                            <input type="text" id="url-input" placeholder="Paste any URL">
+                            <input type="text" id="url-input" placeholder="Paste any URL · Ctrl+Enter to fetch">
                             <textarea id="url-batch-input" placeholder="Paste multiple URLs here (one per line)..."
                                 style="display: none; height: 100px; resize: vertical; width: 100%; border-radius: 8px; border: 1px solid var(--border-color); background: var(--card-bg); color: var(--text-main); font-size: 14px; padding: 12px 16px; outline: none;"></textarea>
                             <div class="input-shortcuts" aria-label="URL input actions">
@@ -112,46 +134,73 @@
                     </div>
                     <!-- Save location and download tools share one compact utility row. -->
                     <div class="downloads-utility-row">
-                    <div id="selected-path-display" class="selected-path-display">
-                        <i data-lucide="folder-down" aria-hidden="true"></i>
-                        <span>Saving to:</span> <span id="active-save-path"></span>
-                    </div>
-                    <div class="downloads-tools-row">
-                        <div class="download-actions-menu">
-                            <button id="btn-toggle-download-actions" class="download-tool-button" type="button"
-                                aria-label="Download actions" aria-expanded="false" aria-controls="download-actions-popover"
-                                title="Download actions">
-                                <i data-lucide="ellipsis" aria-hidden="true"></i>
-                            </button>
-                            <div id="download-actions-popover" class="download-actions-popover" hidden>
-                                <button id="btn-pause-all" class="download-action-option" type="button" title="Pause all active downloads">
-                                    <i data-lucide="pause" aria-hidden="true"></i> Pause all
+                        <div id="selected-path-display" class="selected-path-display">
+                            <i data-lucide="folder-down" aria-hidden="true"></i>
+                            <span>Saving to:</span> <span id="active-save-path"></span>
+                        </div>
+                        <div class="downloads-tools-row">
+                            <div class="bot-activity-menu">
+                                <button id="btn-bot-activity" class="download-tool-button bot-activity-button"
+                                    type="button" aria-label="نشاط بوت تيليجرام" aria-expanded="false"
+                                    aria-controls="bot-activity-popover" title="إشعارات تنزيلات بوت تيليجرام">
+                                    <i data-lucide="bell" aria-hidden="true"></i>
+                                    <span>نشاط البوت</span>
+                                    <b id="bot-activity-badge" hidden>0</b>
                                 </button>
-                                <button id="btn-resume-all" class="download-action-option" type="button" title="Resume all paused downloads">
-                                    <i data-lucide="play" aria-hidden="true"></i> Resume paused
+                                <div id="bot-activity-popover" class="bot-activity-popover" hidden>
+                                    <div class="bot-activity-header">
+                                        <strong>تنزيلات بوت تيليجرام</strong>
+                                        <button id="btn-clear-bot-activity" type="button">قراءة الكل</button>
+                                    </div>
+                                    <div id="bot-activity-list" class="bot-activity-list" aria-live="polite">
+                                        <div class="bot-activity-empty">لا توجد تنزيلات من البوت حتى الآن.</div>
+                                    </div>
+                                    <div id="bot-activity-sync-status" class="bot-activity-sync-status">المزامنة
+                                        السحابية قيد الاتصال…</div>
+                                </div>
+                            </div>
+                            <div class="download-actions-menu">
+                                <button id="btn-toggle-download-actions" class="download-tool-button" type="button"
+                                    aria-label="Download actions" aria-expanded="false"
+                                    aria-controls="download-actions-popover" title="Download actions">
+                                    <i data-lucide="ellipsis" aria-hidden="true"></i>
                                 </button>
-                                <button id="btn-retry-failed" class="download-action-option" type="button" title="Retry all failed downloads">
-                                    <i data-lucide="refresh-cw" aria-hidden="true"></i> Retry failed
+                                <div id="download-actions-popover" class="download-actions-popover" hidden>
+                                    <button id="btn-pause-all" class="download-action-option" type="button"
+                                        title="Pause all active downloads">
+                                        <i data-lucide="pause" aria-hidden="true"></i> Pause all
+                                    </button>
+                                    <button id="btn-resume-all" class="download-action-option" type="button"
+                                        title="Resume all paused downloads">
+                                        <i data-lucide="play" aria-hidden="true"></i> Resume paused
+                                    </button>
+                                    <button id="btn-retry-failed" class="download-action-option" type="button"
+                                        title="Retry all failed downloads">
+                                        <i data-lucide="refresh-cw" aria-hidden="true"></i> Retry failed
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="downloads-search" class="downloads-search">
+                                <button id="btn-toggle-download-search" class="download-tool-button" type="button"
+                                    aria-label="Search downloads" aria-expanded="false"
+                                    aria-controls="downloads-search-input" title="Search downloads (Ctrl+K)">
+                                    <i data-lucide="search" aria-hidden="true"></i>
                                 </button>
+                                <input id="downloads-search-input" type="search" placeholder="Search downloads..."
+                                    aria-label="Search by file name, link, or error" autocomplete="off" tabindex="-1">
                             </div>
                         </div>
-                        <div id="downloads-search" class="downloads-search">
-                            <button id="btn-toggle-download-search" class="download-tool-button" type="button"
-                                aria-label="Search downloads" aria-expanded="false" aria-controls="downloads-search-input"
-                                title="Search downloads">
-                                <i data-lucide="search" aria-hidden="true"></i>
-                            </button>
-                            <input id="downloads-search-input" type="search" placeholder="Search downloads..."
-                                aria-label="Search by file name, link, or error" autocomplete="off" tabindex="-1">
-                        </div>
-                    </div>
                     </div>
                     <div class="filter-sort-bar"
                         style="display: flex; gap: 12px; margin-top: 16px; align-items: center;">
-                        <button class="filter-btn active" type="button" data-filter="all">All</button>
-                        <button class="filter-btn" type="button" data-filter="downloading">Active</button>
-                        <button class="filter-btn" type="button" data-filter="completed">Completed</button>
-                        <button class="filter-btn" type="button" data-filter="error">Errors</button>
+                        <button class="filter-btn active" type="button" data-filter="all">All <span class="filter-count"
+                                data-count-for="all">0</span></button>
+                        <button class="filter-btn" type="button" data-filter="downloading">Active <span
+                                class="filter-count" data-count-for="downloading">0</span></button>
+                        <button class="filter-btn" type="button" data-filter="completed">Completed <span
+                                class="filter-count" data-count-for="completed">0</span></button>
+                        <button class="filter-btn" type="button" data-filter="error">Errors <span class="filter-count"
+                                data-count-for="error">0</span></button>
                         <div style="flex: 1;"></div>
                         <select id="sort-select" class="sort-select">
                             <option value="date-desc">Newest First</option>
@@ -159,9 +208,6 @@
                             <option value="speed-desc">Fastest Speed</option>
                             <option value="name-asc">Name (A-Z)</option>
                         </select>
-                        <button id="btn-clear-completed" type="button" class="filter-btn" style="color: var(--danger-color); border-color: rgba(239, 68, 68, 0.2);" title="Clear Completed Downloads">
-                            <i data-lucide="trash-2" style="width: 14px; height: 14px; margin-right: 4px;"></i> Clear Completed
-                        </button>
                     </div>
                 </header>
 
@@ -188,37 +234,53 @@
 
                 <!-- Update Download Link Modal (تحديث رابط التحميل) -->
                 <div id="update-url-modal" class="modal-overlay" style="display: none; z-index: 10001;">
-                    <div class="modal-content" style="max-width: 520px; width: 90%; background: var(--bg-surface, #1e293b); border-radius: 14px; border: 1px solid var(--border-color, rgba(255,255,255,0.1)); box-shadow: 0 20px 40px rgba(0,0,0,0.5); padding: 24px;">
+                    <div class="modal-content"
+                        style="max-width: 520px; width: 90%; background: var(--bg-surface, #1e293b); border-radius: 14px; border: 1px solid var(--border-color, rgba(255,255,255,0.1)); box-shadow: 0 20px 40px rgba(0,0,0,0.5); padding: 24px;">
                         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 14px;">
-                            <div style="width: 40px; height: 40px; border-radius: 10px; background: rgba(59, 130, 246, 0.15); display: flex; align-items: center; justify-content: center; color: #3b82f6;">
+                            <div
+                                style="width: 40px; height: 40px; border-radius: 10px; background: rgba(59, 130, 246, 0.15); display: flex; align-items: center; justify-content: center; color: #3b82f6;">
                                 <i data-lucide="link-2" style="width: 22px; height: 22px;"></i>
                             </div>
                             <div>
-                                <h3 style="margin: 0; font-size: 17px; font-weight: 600; color: var(--text-primary, #f8fafc);">تحديث رابط التحميل (Update Link)</h3>
-                                <p style="margin: 2px 0 0; font-size: 13px; color: var(--text-muted, #94a3b8);">استئناف التحميل برابط جديد دون فقدان البيانات السابقة</p>
+                                <h3
+                                    style="margin: 0; font-size: 17px; font-weight: 600; color: var(--text-primary, #f8fafc);">
+                                    تحديث رابط التحميل (Update Link)</h3>
+                                <p style="margin: 2px 0 0; font-size: 13px; color: var(--text-muted, #94a3b8);">استئناف
+                                    التحميل برابط جديد دون فقدان البيانات السابقة</p>
                             </div>
                         </div>
 
-                        <div style="background: rgba(0,0,0,0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; border: 1px solid rgba(255,255,255,0.05);">
-                            <div style="font-size: 12px; color: var(--text-muted, #94a3b8); margin-bottom: 4px;">الملف:</div>
-                            <div id="update-url-filename" style="font-size: 13px; font-weight: 500; color: var(--text-primary, #f1f5f9); word-break: break-all;">--</div>
+                        <div
+                            style="background: rgba(0,0,0,0.2); border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; border: 1px solid rgba(255,255,255,0.05);">
+                            <div style="font-size: 12px; color: var(--text-muted, #94a3b8); margin-bottom: 4px;">الملف:
+                            </div>
+                            <div id="update-url-filename"
+                                style="font-size: 13px; font-weight: 500; color: var(--text-primary, #f1f5f9); word-break: break-all;">
+                                --</div>
                         </div>
 
                         <div style="margin-bottom: 18px;">
-                            <label style="display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary, #cbd5e1); margin-bottom: 6px;">الرابط الجديد (Fresh Download Link):</label>
+                            <label
+                                style="display: block; font-size: 13px; font-weight: 500; color: var(--text-secondary, #cbd5e1); margin-bottom: 6px;">الرابط
+                                الجديد (Fresh Download Link):</label>
                             <div style="position: relative; display: flex; align-items: center;">
-                                <input type="url" id="input-new-download-url" placeholder="الصق الرابط الجديد هنا https://..."
+                                <input type="url" id="input-new-download-url"
+                                    placeholder="الصق الرابط الجديد هنا https://..."
                                     style="width: 100%; padding: 10px 40px 10px 12px; border-radius: 8px; background: var(--bg-dark, #0f172a); color: white; border: 1px solid var(--border-color, rgba(255,255,255,0.15)); font-size: 13px; outline: none; transition: border-color 0.2s;" />
-                                <button id="btn-paste-new-url" type="button" title="لصق من الحافظة (Paste)" style="position: absolute; right: 8px; background: none; border: none; color: #3b82f6; cursor: pointer; padding: 4px; display: flex; align-items: center;">
+                                <button id="btn-paste-new-url" type="button" title="لصق من الحافظة (Paste)"
+                                    style="position: absolute; right: 8px; background: none; border: none; color: #3b82f6; cursor: pointer; padding: 4px; display: flex; align-items: center;">
                                     <i data-lucide="clipboard" style="width: 18px; height: 18px;"></i>
                                 </button>
                             </div>
-                            <span id="update-url-error" style="display: none; color: #ef4444; font-size: 12px; margin-top: 6px;"></span>
+                            <span id="update-url-error"
+                                style="display: none; color: #ef4444; font-size: 12px; margin-top: 6px;"></span>
                         </div>
 
                         <div class="modal-actions" style="display: flex; gap: 10px; justify-content: flex-end;">
-                            <button id="btn-cancel-update-url" class="btn-secondary" style="padding: 9px 18px; border-radius: 8px; cursor: pointer;">إلغاء</button>
-                            <button id="btn-confirm-update-url" class="btn-primary" style="padding: 9px 20px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px; background: #3b82f6; color: white; font-weight: 500;">
+                            <button id="btn-cancel-update-url" class="btn-secondary"
+                                style="padding: 9px 18px; border-radius: 8px; cursor: pointer;">إلغاء</button>
+                            <button id="btn-confirm-update-url" class="btn-primary"
+                                style="padding: 9px 20px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px; background: #3b82f6; color: white; font-weight: 500;">
                                 <i data-lucide="play" style="width: 15px; height: 15px;"></i>
                                 <span>تحديث واستئناف</span>
                             </button>
@@ -255,7 +317,8 @@
                                 <div class="empty-state-icon"><i data-lucide="download-cloud"></i></div>
                                 <h2>Ready when you are</h2>
                                 <p>Paste a link above to start your next download.</p>
-                                <span><i data-lucide="sparkles"></i> Video, audio, and direct files</span>
+                                <span><i data-lucide="sparkles"></i> Video, audio, and direct files · Ctrl+Space for
+                                    Quick Add</span>
                             </div>
                             <!-- Download Items injected via JS -->
                         </div>
@@ -356,12 +419,13 @@
                             style="padding: 16px 24px; border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
                             <span style="font-size: 12px; color: var(--text-muted);">Appearance</span>
                             <div style="display: flex; gap: 8px;">
-                                <button id="btn-theme-light" class="btn-icon"
-                                    style="width: 28px; height: 28px; border-radius: 6px;"><i data-lucide="sun"
+                                <button id="btn-theme-light" class="btn-icon" type="button" title="Light theme"
+                                    aria-label="Light theme" style="width: 28px; height: 28px; border-radius: 6px;"><i
+                                        data-lucide="sun" style="width: 14px; height: 14px;"></i></button>
+                                <button id="btn-theme-cyberpunk" class="btn-icon" type="button" title="Cyberpunk theme"
+                                    aria-label="Cyberpunk theme"
+                                    style="width: 28px; height: 28px; border-radius: 6px;"><i data-lucide="flame"
                                         style="width: 14px; height: 14px;"></i></button>
-                                <button id="btn-theme-dark" class="btn-icon"
-                                    style="width: 28px; height: 28px; background: var(--accent-primary); color: white; border: none; border-radius: 6px;"><i
-                                        data-lucide="moon" style="width: 14px; height: 14px;"></i></button>
                             </div>
                         </div>
                     </aside>
@@ -403,7 +467,7 @@
                         <div class="settings-title-group">
                             <h2><i data-lucide="sliders-horizontal" style="color: var(--accent-primary);"></i> الإعدادات
                                 والتحكم</h2>
-                            <p>كل إعداداتك محفوظة على جهازك وتُطبّق فوراً.</p>
+                            <p>إعدادات الجهاز تُطبّق فورًا، وإعدادات بوتك وسجل تنزيلاتك يتزامنان عبر Firebase.</p>
                             <span id="settings-save-state" class="settings-save-state" role="status"
                                 aria-live="polite"><i data-lucide="check"></i> يتم الحفظ تلقائياً</span>
                         </div>
@@ -432,10 +496,121 @@
                             role="tab" aria-selected="false" aria-controls="tab-extension" tabindex="-1">
                             <i data-lucide="puzzle"></i> إضافة المتصفح
                         </button>
+                        <button id="settings-tab-bot-telegram" class="settings-tab-btn" data-settings-tab="bot-telegram"
+                            role="tab" aria-selected="false" aria-controls="tab-bot-telegram" tabindex="-1">
+                            <i data-lucide="send"></i> بوت تيليجرام
+                        </button>
                         <button id="settings-tab-about" class="settings-tab-btn" data-settings-tab="about" role="tab"
                             aria-selected="false" aria-controls="tab-about" tabindex="-1">
                             <i data-lucide="info"></i> حول التطبيق
                         </button>
+                    </div>
+
+                    <!-- PERSONAL TELEGRAM BOT -->
+                    <div class="settings-tab-page" id="tab-bot-telegram" role="tabpanel"
+                        aria-labelledby="settings-tab-bot-telegram">
+                        <div id="telegram-local-connection-card" class="settings-card">
+                            <div class="settings-card-header">
+                                <div class="settings-card-icon"><i data-lucide="send"></i></div>
+                                <div class="settings-card-title">
+                                    <h3>ربط بوت تيليجرام بهذا الجهاز</h3>
+                                    <p>إعداد محلي مشفّر لتشغيل البوت واستقبال التنزيلات على هذا الجهاز.</p>
+                                </div>
+                            </div>
+                            <div class="telegram-settings-panel">
+                                <div class="telegram-settings-copy">
+                                    <strong>نزّل وأرسل من تيليجرام</strong>
+                                    <span>ابعت رابطًا، اختار النوع والجودة، وتابع التقدم في التطبيق وفي تيليجرام.</span>
+                                </div>
+                                <label for="telegram-bot-token">توكن البوت</label>
+                                <input id="telegram-bot-token" type="password" autocomplete="new-password"
+                                    spellcheck="false" placeholder="الصق توكن BotFather هنا" dir="ltr">
+                                <small>التوكن لا يُرفع إلى Firebase؛ يُحفظ مشفّرًا على هذا الجهاز فقط.</small>
+                                <div class="telegram-settings-actions">
+                                    <button id="btn-auto-link-telegram"
+                                        class="btn-settings-action telegram-primary-action" type="button">ربط البوت
+                                        وفتحه</button>
+                                    <button id="btn-disconnect-telegram" class="btn-settings-danger" type="button"
+                                        hidden>إلغاء الربط</button>
+                                </div>
+                                <div id="telegram-connection-status" class="telegram-connection-status" role="status"
+                                    aria-live="polite">جارٍ التحقق من حالة الربط…</div>
+                            </div>
+                        </div>
+
+                        <div id="telegram-admin-panel" class="settings-card telegram-admin-card">
+                            <div class="settings-card-header">
+                                <div class="settings-card-icon"><i data-lucide="sliders-horizontal"></i></div>
+                                <div class="settings-card-title">
+                                    <h3>إعدادات بوتك ومزامنتها</h3>
+                                    <p>كل مستخدم يربط بوت التليجرام الخاص به. إعداداتك وسجل تنزيلاتك محفوظان في مساحة
+                                        Firebase الخاصة بك. آخر مزامنة: <span id="telegram-admin-sync-time">—</span></p>
+                                </div>
+                            </div>
+                            <div id="telegram-admin-controls" class="telegram-admin-controls">
+                                <label class="telegram-admin-toggle"><input id="admin-bot-enabled"
+                                        type="checkbox"><span>تشغيل البوت</span></label>
+                                <label class="telegram-admin-toggle"><input id="admin-bot-video"
+                                        type="checkbox"><span>السماح بالفيديو</span></label>
+                                <label class="telegram-admin-toggle"><input id="admin-bot-audio"
+                                        type="checkbox"><span>السماح بالصوت</span></label>
+                                <label class="telegram-admin-toggle"><input id="admin-bot-direct"
+                                        type="checkbox"><span>السماح بالملفات المباشرة</span></label>
+                                <label class="telegram-admin-toggle"><input id="admin-bot-multiple"
+                                        type="checkbox"><span>السماح بأكثر من رابط</span></label>
+                                <label class="telegram-admin-value">أقصى روابط بالرسالة
+                                    <select id="admin-bot-max-links">
+                                        <option value="1">1</option>
+                                        <option value="2">2</option>
+                                        <option value="3">3</option>
+                                        <option value="4">4</option>
+                                        <option value="5" selected>5</option>
+                                    </select>
+                                </label>
+                                <label class="telegram-admin-value">أقصى حجم للملف
+                                    <select id="admin-bot-max-size">
+                                        <option value="10">10 MB</option>
+                                        <option value="20">20 MB</option>
+                                        <option value="50" selected>50 MB</option>
+                                    </select>
+                                </label>
+                                <label class="telegram-admin-value">مهلة انتظار رسائل تيليجرام
+                                    <select id="admin-bot-poll">
+                                        <option value="1">1 ثانية</option>
+                                        <option value="3" selected>3 ثوانٍ</option>
+                                        <option value="5">5 ثوانٍ</option>
+                                        <option value="10">10 ثوانٍ</option>
+                                    </select>
+                                </label>
+                                <div class="telegram-admin-choice-group">
+                                    <strong>جودات الفيديو</strong>
+                                    <label><input type="checkbox" data-video-quality="best"> أفضل جودة</label>
+                                    <label><input type="checkbox" data-video-quality="1080p"> 1080p</label>
+                                    <label><input type="checkbox" data-video-quality="720p"> 720p</label>
+                                    <label><input type="checkbox" data-video-quality="480p"> 480p</label>
+                                    <label><input type="checkbox" data-video-quality="360p"> 360p</label>
+                                </div>
+                                <div class="telegram-admin-choice-group">
+                                    <strong>صيغ الصوت</strong>
+                                    <label><input type="checkbox" data-audio-format="audio-mp3"> MP3</label>
+                                    <label><input type="checkbox" data-audio-format="audio-m4a"> M4A</label>
+                                </div>
+                                <label class="telegram-admin-message">رسالة الترحيب
+                                    <textarea id="admin-bot-welcome" maxlength="1000" rows="3"
+                                        placeholder="اتركها فارغة لاستخدام الرسالة الافتراضية"></textarea>
+                                </label>
+                                <label class="telegram-admin-message">رسالة المساعدة
+                                    <textarea id="admin-bot-help" maxlength="3000" rows="5"
+                                        placeholder="اتركها فارغة لاستخدام رسالة المساعدة الافتراضية"></textarea>
+                                </label>
+                            </div>
+                            <div class="telegram-admin-actions">
+                                <button id="btn-save-telegram-admin-settings"
+                                    class="btn-settings-action telegram-primary-action" type="button">حفظ إعدادات بوتي
+                                    ومزامنتها</button>
+                                <span id="telegram-admin-save-status" role="status" aria-live="polite"></span>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- TAB 1: GENERAL & STORAGE -->
@@ -458,8 +633,7 @@
                                 <button id="btn-settings-change-path" class="btn-settings-action">
                                     <i data-lucide="folder-open"></i> change folder
                                 </button>
-                                <button id="btn-settings-open-folder" class="btn-settings-action"
-                                    title="open folder">
+                                <button id="btn-settings-open-folder" class="btn-settings-action" title="open folder">
                                     <i data-lucide="external-link"></i> open
                                 </button>
                             </div>
@@ -491,7 +665,8 @@
                             <div class="setting-item-row">
                                 <div class="setting-item-info">
                                     <span class="setting-item-title">إبقاء التطبيق في منطقة الإشعارات عند الإغلاق</span>
-                                    <span class="setting-item-desc">إيقاف الخيار ينهي التطبيق ومحرك التحميل؛ التنزيلات الجارية ستتوقف</span>
+                                    <span class="setting-item-desc">إيقاف الخيار ينهي التطبيق ومحرك التحميل؛ التنزيلات
+                                        الجارية ستتوقف</span>
                                 </div>
                                 <label class="toggle-switch">
                                     <input type="checkbox" id="checkbox-close-to-tray" checked
@@ -526,7 +701,8 @@
                             <div class="setting-item-row">
                                 <div class="setting-item-info">
                                     <span class="setting-item-title">تنظيم الملفات في مجلدات حسب النوع</span>
-                                    <span class="setting-item-desc">ينقل الملفات المكتملة تلقائياً إلى مجلدات الفيديو والصوت
+                                    <span class="setting-item-desc">ينقل الملفات المكتملة تلقائياً إلى مجلدات الفيديو
+                                        والصوت
                                         والمستندات والأرشيفات داخل مجلد التنزيلات</span>
                                 </div>
                                 <label class="toggle-switch">
@@ -582,7 +758,8 @@
                             <div class="setting-item-row">
                                 <div class="setting-item-info">
                                     <span class="setting-item-title">فتح مكان الملف بعد اكتمال التحميل</span>
-                                    <span class="setting-item-desc">يفتح مستكشف الملفات ويحدد الملف الذي انتهى تنزيله؛ عطّله لو كنت تنزّل ملفات كثيرة معًا</span>
+                                    <span class="setting-item-desc">يفتح مستكشف الملفات ويحدد الملف الذي انتهى تنزيله؛
+                                        عطّله لو كنت تنزّل ملفات كثيرة معًا</span>
                                 </div>
                                 <label class="toggle-switch">
                                     <input type="checkbox" id="checkbox-open-completed-folder"
@@ -602,42 +779,11 @@
                                 <div class="settings-card-icon"><i data-lucide="palette"></i></div>
                                 <div class="settings-card-title">
                                     <h3>الثيمات والمظهر</h3>
-                                    <p>اختار الشكل اللي يعجبك - داكن أو فاتح</p>
+                                    <p>اختار بين الفاتح وسايبربانك المتوهج</p>
                                 </div>
                             </div>
 
                             <div class="theme-selector-grid">
-                                <div class="theme-card-option" data-theme-val="system">
-                                    <div class="theme-preview-box"
-                                        style="background: linear-gradient(135deg, #0f172a 50%, #f8fafc 50%); border: 1px solid rgba(255,255,255,0.15);">
-                                        <i data-lucide="monitor" style="color: var(--accent-primary);"></i>
-                                    </div>
-                                    <div class="theme-option-info">
-                                        <span class="theme-option-name">تلقائي (حسب نظام الجهاز)</span>
-                                        <span class="theme-check-icon"><i data-lucide="check"></i></span>
-                                    </div>
-                                </div>
-
-                                <div class="theme-card-option" data-theme-val="dark">
-                                    <div class="theme-preview-box preview-dark">
-                                        <i data-lucide="moon" style="color: #60a5fa;"></i>
-                                    </div>
-                                    <div class="theme-option-info">
-                                        <span class="theme-option-name">داكن — نيبولا</span>
-                                        <span class="theme-check-icon"><i data-lucide="check"></i></span>
-                                    </div>
-                                </div>
-
-                                <div class="theme-card-option" data-theme-val="amoled">
-                                    <div class="theme-preview-box preview-amoled">
-                                        <i data-lucide="sparkles" style="color: #ffffff;"></i>
-                                    </div>
-                                    <div class="theme-option-info">
-                                        <span class="theme-option-name">أسود كامل (OLED)</span>
-                                        <span class="theme-check-icon"><i data-lucide="check"></i></span>
-                                    </div>
-                                </div>
-
                                 <div class="theme-card-option" data-theme-val="cyberpunk">
                                     <div class="theme-preview-box preview-cyberpunk">
                                         <i data-lucide="flame" style="color: #c084fc;"></i>
@@ -653,7 +799,7 @@
                                         <i data-lucide="sun" style="color: #f59e0b;"></i>
                                     </div>
                                     <div class="theme-option-info">
-                                        <span class="theme-option-name">فاتح — دايبريك</span>
+                                        <span class="theme-option-name">فاتح — زجاج سماوي</span>
                                         <span class="theme-check-icon"><i data-lucide="check"></i></span>
                                     </div>
                                 </div>
@@ -815,8 +961,8 @@
                             <div class="setting-item-row">
                                 <div class="setting-item-info">
                                     <span class="setting-item-title">وضع توفير الطاقة</span>
-                                    <span class="setting-item-desc">يوقف التأثيرات الثقيلة زي الضباب والتوهج والموجات
-                                        المتحركة — مناسب للأجهزة الضعيفة أو اللابتوب</span>
+                                    <span class="setting-item-desc">يوقف التمويه واللمعان والحركة بالكامل، ويقلل تحديث
+                                        الرسوم وفحص حالة التنزيل الاحتياطي. التنزيلات نفسها تستمر طبيعيًا.</span>
                                 </div>
                                 <label class="toggle-switch" id="toggle-power-saver">
                                     <input type="checkbox" id="checkbox-power-saver" aria-label="وضع توفير الطاقة">
@@ -857,19 +1003,21 @@
                                 البرنامج ومش محتاج إنترنت عشان تركّبها!
                             </p>
                             <p class="settings-desc" style="margin-bottom: 14px; color: var(--text-muted);">
-                                المتصفح يمنع التثبيت الصامت للإضافات المحلية؛ الزر يفتح صفحة الإضافات ومجلدها، ثم اختر Load unpacked. فحص الاتصال يتحقق من ملفات الإضافة والمحرك المحلي، ولا يستطيع معرفة هل فعّلت الإضافة داخل المتصفح.
+                                المتصفح يمنع التثبيت الصامت للإضافات المحلية؛ الزر يفتح صفحة الإضافات ومجلدها، ثم اختر
+                                Load unpacked. فحص الاتصال يتحقق من ملفات الإضافة والمحرك المحلي، ولا يستطيع معرفة هل
+                                فعّلت الإضافة داخل المتصفح.
                             </p>
 
                             <div style="display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;">
-    <button id="btn-install-extension" class="btn-primary"
-        style="padding: 14px 24px; font-weight: 700; display: inline-flex; align-items: center; gap: 10px; flex: 1; justify-content: center; font-size: 15px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 16px rgba(16, 185, 129, 0.4);">
-        <i data-lucide="zap"></i>
-        إعداد الإضافة في Chrome أو Edge
-    </button>
-</div>
-<div style="display: flex; gap: 12px; flex-wrap: wrap;">
-    <button id="btn-open-extension-folder" class="btn-settings-action"
-        style="padding: 10px 20px; font-weight: 600; display: inline-flex; align-items: center; gap: 10px;">
+                                <button id="btn-install-extension" class="btn-primary"
+                                    style="padding: 14px 24px; font-weight: 700; display: inline-flex; align-items: center; gap: 10px; flex: 1; justify-content: center; font-size: 15px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); box-shadow: 0 4px 16px rgba(16, 185, 129, 0.4);">
+                                    <i data-lucide="zap"></i>
+                                    إعداد الإضافة في Chrome أو Edge
+                                </button>
+                            </div>
+                            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                                <button id="btn-open-extension-folder" class="btn-settings-action"
+                                    style="padding: 10px 20px; font-weight: 600; display: inline-flex; align-items: center; gap: 10px;">
                                     <i data-lucide="folder-symlink"></i>
                                     فتح مجلد الإضافة
                                 </button>
@@ -985,30 +1133,84 @@
                                     <p>تحقق من وجود إصدار جديد من التطبيق</p>
                                 </div>
                             </div>
-                            <div style="display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap;">
-                                <button id="btn-manual-check-update" class="settings-action-btn" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(99,102,241,0.08)); border: 1px solid rgba(99,102,241,0.3); border-radius: 10px; color: #818cf8; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s ease; font-family: inherit;">
-                                    <i data-lucide="refresh-cw" style="width: 16px; height: 16px;"></i> التحقق من التحديثات
+                            <div
+                                style="display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap;">
+                                <button id="btn-manual-check-update" class="settings-action-btn"
+                                    style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 20px; background: linear-gradient(135deg, rgba(99,102,241,0.15), rgba(99,102,241,0.08)); border: 1px solid rgba(99,102,241,0.3); border-radius: 10px; color: #818cf8; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s ease; font-family: inherit;">
+                                    <i data-lucide="refresh-cw" style="width: 16px; height: 16px;"></i> التحقق من
+                                    التحديثات
                                 </button>
-                                <button id="btn-install-update" class="settings-action-btn" style="display: none; align-items: center; gap: 8px; padding: 10px 20px; background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.08)); border: 1px solid rgba(16,185,129,0.3); border-radius: 10px; color: #10b981; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s ease; font-family: inherit;">
+                                <button id="btn-install-update" class="settings-action-btn"
+                                    style="display: none; align-items: center; gap: 8px; padding: 10px 20px; background: linear-gradient(135deg, rgba(16,185,129,0.15), rgba(16,185,129,0.08)); border: 1px solid rgba(16,185,129,0.3); border-radius: 10px; color: #10b981; font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s ease; font-family: inherit;">
                                     <i data-lucide="zap" style="width: 16px; height: 16px;"></i> تثبيت وإعادة التشغيل
                                 </button>
-                                <span id="update-check-status" style="font-size: 12px; color: var(--text-muted); min-width: 150px;"></span>
-                                
+                                <span id="update-check-status"
+                                    style="font-size: 12px; color: var(--text-muted); min-width: 150px;"></span>
+
                                 <!-- Update Progress Bar -->
-                                <div id="update-progress-container" style="display: none; width: 100%; margin-top: 10px; flex-basis: 100%;">
-                                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 11px; color: var(--text-muted);">
+                                <div id="update-progress-container"
+                                    style="display: none; width: 100%; margin-top: 10px; flex-basis: 100%;">
+                                    <div
+                                        style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 11px; color: var(--text-muted);">
                                         <span>جاري التحميل...</span>
                                         <span id="update-progress-text">0%</span>
                                     </div>
-                                    <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;">
-                                        <div id="update-progress-bar" style="height: 100%; width: 0%; background: var(--accent-primary); transition: width 0.3s ease;"></div>
+                                    <div
+                                        style="width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;">
+                                        <div id="update-progress-bar"
+                                            style="height: 100%; width: 0%; background: var(--accent-primary); transition: width 0.3s ease;">
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
+                        <div class="settings-card">
+                            <div class="settings-card-header">
+                                <div class="settings-card-icon"><i data-lucide="boxes"></i></div>
+                                <div class="settings-card-title">
+                                    <h3>تحديث مكتبات محرك التحميل</h3>
+                                    <p>يفحص ويحدّث كل الحزم الموجودة في requirements.txt، ثم يجهّزها للتشغيل القادم.</p>
+                                </div>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap;">
+                                <button id="btn-check-engine-updates" class="settings-action-btn" type="button"
+                                    style="display:inline-flex;align-items:center;gap:8px;padding:10px 20px;background:linear-gradient(135deg,rgba(99,102,241,0.15),rgba(99,102,241,0.08));border:1px solid rgba(99,102,241,0.3);border-radius:10px;color:#818cf8;font-weight:600;font-size:13px;cursor:pointer;transition:all 0.2s ease;font-family:inherit;">
+                                    <i data-lucide="package-check" style="width:16px;height:16px;"></i> فحص وتحديث كل
+                                    المكتبات
+                                </button>
+                                <span id="engine-update-status" role="status" aria-live="polite"
+                                    style="font-size:12px;color:var(--text-muted);min-width:180px;"></span>
+                                <button id="btn-engine-update-powershell" class="settings-action-btn" type="button"
+                                    hidden
+                                    style="padding:8px 14px;border:1px solid rgba(245,158,11,0.4);border-radius:9px;color:#fbbf24;background:rgba(245,158,11,0.08);font-family:inherit;cursor:pointer;">
+                                    فتح PowerShell لإعادة المحاولة
+                                </button>
+                                <div id="engine-update-progress-container"
+                                    style="display:none;width:100%;margin-top:4px;flex-basis:100%;">
+                                    <div
+                                        style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:11px;color:var(--text-muted);">
+                                        <span id="engine-update-progress-label">جارٍ تحديث حزم
+                                            requirements.txt...</span>
+                                        <span id="engine-update-progress-text">0%</span>
+                                    </div>
+                                    <div
+                                        style="width:100%;height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden;">
+                                        <div id="engine-update-progress-bar"
+                                            style="height:100%;width:0%;background:var(--accent-primary);transition:width 0.2s ease;">
+                                        </div>
+                                    </div>
+                                </div>
+                                <details id="engine-update-details" hidden style="width:100%;flex-basis:100%;margin-top:6px;">
+                                    <summary style="cursor:pointer;color:var(--accent-primary);font-size:12px;">تفاصيل الإصدارات والحزم</summary>
+                                    <div id="engine-update-details-content" style="margin-top:8px;"></div>
+                                </details>
+                            </div>
+                        </div>
+
                         <!-- Creator Card -->
-                        <div id="public-links" class="settings-card" hidden style="display:flex;gap:10px;flex-wrap:wrap;">
+                        <div id="public-links" class="settings-card" hidden
+                            style="display:flex;gap:10px;flex-wrap:wrap;">
                             <!-- Populated from the admin-managed public_links document. -->
                         </div>
 
@@ -1028,6 +1230,12 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Media Tools View -->
+            <section id="view-tools" class="view-section media-view" aria-label="الأدوات"></section>
+
+            <!-- Smart Library Hub -->
+            <section id="view-library-hub" class="view-section library-hub-view" aria-label="مركز التنزيلات الذكي"></section>
 
             <!-- Statistics View -->
             <div id="view-stats" class="view-section">
@@ -1136,312 +1344,137 @@
                         <section class="stat-card stats-chart-card">
                             <div class="stats-section-heading">
                                 <div class="stats-heading-icon"><i data-lucide="chart-pie"></i></div>
-                                <div><h3>Download Distribution</h3><p>File types in your download history</p></div>
+                                <div>
+                                    <h3>Download Distribution</h3>
+                                    <p>File types in your download history</p>
+                                </div>
                             </div>
                             <div class="stats-chart-wrap"><canvas id="downloadsChart"></canvas></div>
                         </section>
                         <section class="stat-card stats-management-card">
                             <div class="stats-section-heading">
                                 <div class="stats-heading-icon"><i data-lucide="database"></i></div>
-                                <div><h3>Data Management</h3><p>Review what will change before cleaning.</p></div>
+                                <div>
+                                    <h3>Data Management</h3>
+                                    <p>Review what will change before cleaning.</p>
+                                </div>
                             </div>
                             <div class="cleanup-preview-panel">
                                 <div class="cleanup-preview-top">
-                                    <div><span class="cleanup-preview-label">TEMP FILES FOUND</span><strong id="cleanup-preview-count">Checking…</strong></div>
+                                    <div><span class="cleanup-preview-label">TEMP FILES FOUND</span><strong
+                                            id="cleanup-preview-count">Checking…</strong></div>
                                     <span id="cleanup-preview-size" class="cleanup-preview-size">—</span>
                                 </div>
-                                <p id="cleanup-preview-note">Only incomplete download fragments are included. Active downloads are protected.</p>
-                                <ul id="cleanup-preview-files" class="cleanup-preview-files" aria-label="Temporary files preview"></ul>
-                                <button id="btn-cleanup-temps" class="btn-settings-action stats-action-primary" type="button" disabled>
+                                <p id="cleanup-preview-note">Only incomplete download fragments are included. Active
+                                    downloads are protected.</p>
+                                <ul id="cleanup-preview-files" class="cleanup-preview-files"
+                                    aria-label="Temporary files preview"></ul>
+                                <button id="btn-cleanup-temps" class="btn-settings-action stats-action-primary"
+                                    type="button" disabled>
                                     <i data-lucide="sparkles"></i><span>Clean temporary files</span>
                                 </button>
                             </div>
                             <div class="stats-management-actions">
-                                <button id="btn-export-history" class="btn-settings-action stats-action-secondary" type="button">
+                                <button id="btn-export-history" class="btn-settings-action stats-action-secondary"
+                                    type="button">
                                     <i data-lucide="file-down"></i><span>Export history (CSV)</span>
                                 </button>
-                                <button id="btn-clear-completed-history" class="btn-settings-action stats-action-secondary" type="button">
+                                <button id="btn-clear-completed-history"
+                                    class="btn-settings-action stats-action-secondary" type="button">
                                     <i data-lucide="list-x"></i><span>Clear completed history</span>
                                 </button>
-                                <button id="btn-clear-history" class="btn-settings-danger stats-action-secondary" type="button">
+                                <button id="btn-clear-history" class="btn-settings-danger stats-action-secondary"
+                                    type="button">
                                     <i data-lucide="trash-2"></i><span>Clear all history</span>
                                 </button>
                             </div>
-                            <div class="stats-data-note"><i data-lucide="info"></i><span>History actions remove records from the app. Your downloaded files stay in their folders.</span></div>
+                            <div class="stats-data-note"><i data-lucide="info"></i><span>History actions remove records
+                                    from the app. Your downloaded files stay in their folders.</span></div>
                         </section>
                     </div>
                 </div>
             </div>
 
-            <!-- Account View -->
-            <div id="view-account" class="view-section" style="overflow-y: auto; height: 100%; padding-bottom: 40px;">
-                <header class="top-bar">
-                    <h2>My Account</h2>
-                </header>
-                <div class="settings-container">
-
-                    <!-- Auth Section (Visible when NOT logged in) -->
-                    <div id="auth-section" class="auth-card-modern">
-                        <div class="auth-header">
-                            <div class="auth-icon-wrap">
-                                <i data-lucide="shield-check"></i>
-                            </div>
-                            <h3>Welcome to Ledo</h3>
-                            <p>Sign in to unlock premium features and cloud syncing.</p>
+            <!-- Remote Admin Announcement Modal -->
+            <div id="announcement-modal" class="modal-overlay remote-admin-modal-overlay"
+                style="display: none; z-index: 10001;" dir="rtl">
+                <div class="modal-content remote-admin-modal">
+                    <button id="btn-close-announcement-modal" class="modal-close-btn" title="إغلاق">
+                        <i data-lucide="x"></i>
+                    </button>
+                    <div class="remote-modal-header">
+                        <div class="remote-modal-icon-wrapper">
+                            <i id="announcement-icon" data-lucide="bell" class="remote-modal-icon"></i>
                         </div>
-
-                        <div class="auth-body">
-                            <div class="input-wrapper modern-input">
-                                <i data-lucide="user" class="input-icon"></i>
-                                <input type="text" id="auth-username" placeholder="Username (e.g. shadow123)">
+                        <div class="remote-modal-title-group">
+                            <div class="badge-row">
+                                <span id="announcement-badge" class="ann-badge ann-badge-info">إشعار إداري</span>
+                                <span id="announcement-remaining" class="ann-remaining-text"
+                                    style="display: none;"></span>
                             </div>
-
-                            <div class="input-wrapper modern-input">
-                                <i data-lucide="lock" class="input-icon"></i>
-                                <input type="password" id="auth-password" placeholder="Password">
-                            </div>
-
-                            <div class="auth-actions">
-                                <button id="btn-login" class="btn-primary auth-btn">
-                                    <span>Login</span>
-                                    <i data-lucide="arrow-right"></i>
-                                </button>
-                                <button id="btn-register" class="btn-secondary auth-btn outline">
-                                    <span>Register</span>
-                                </button>
-                            </div>
-
-                            <div class="auth-divider">
-                                <span>OR</span>
-                            </div>
-
-                            <button id="btn-login-anon" class="btn-secondary auth-btn ghost">
-                                <i data-lucide="user-minus"></i>
-                                <span>Continue as Guest</span>
-                            </button>
-
-                            <div id="auth-error" class="auth-error-msg"></div>
+                            <h3 id="announcement-title">رسالة من الإدارة</h3>
                         </div>
                     </div>
-
-                    <!-- Profile Section (Visible when logged in) -->
-                    <div id="profile-section" class="profile-grid-layout" style="display: none; padding: 20px;">
-
-                        <!-- Top Row: Profile Info -->
-                        <div class="profile-top-row">
-                            <div class="glass-panel profile-hero">
-                                <div class="avatar-container">
-                                    <img id="profile-avatar" src="icon.ico" alt="Avatar" class="profile-avatar-img">
-                                    <label for="avatar-upload" class="avatar-upload-btn" title="Change Avatar">
-                                        <i data-lucide="camera"></i>
-                                    </label>
-                                    <input type="file" id="avatar-upload" accept="image/*" style="display: none;">
-                                </div>
-                                <div class="profile-info-text">
-                                    <h2 id="profile-username" class="profile-name">Username</h2>
-                                    <div class="profile-badge">
-                                        <i data-lucide="award"></i>
-                                        <span id="profile-status">Premium Member</span>
-                                    </div>
-                                </div>
-                                <div style="flex: 1;"></div>
-                                <button id="btn-logout" class="btn-settings-danger btn-logout-top"
-                                    style="padding: 10px 16px;">
-                                    <i data-lucide="log-out"></i>
-                                    <span>تسجيل الخروج</span>
-                                </button>
-                            </div>
-                        </div>
-
-
-                        <!-- Admin Control Panel (Visible only to Admins) -->
-                        <div id="admin-control-panel" class="glass-panel" style="display: none; margin-bottom: 20px; border: 1px solid rgba(239, 68, 68, 0.3);">
-                            <h4 class="panel-title" style="color: #ef4444; border-bottom: 1px solid rgba(239, 68, 68, 0.2); padding-bottom: 14px;">
-                                <i data-lucide="shield-alert"></i> لوحة تحكم الإدارة (Admin Panel)
-                            </h4>
-                            <div style="display: flex; gap: 15px; margin-top: 15px; flex-wrap: wrap;">
-                                <button id="btn-admin-manage-users" class="btn-primary" style="background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3);">
-                                    <i data-lucide="users"></i> إدارة المستخدمين
-                                </button>
-                                <button id="btn-admin-broadcast" class="btn-primary" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.3);">
-                                    <i data-lucide="radio"></i> إرسال إعلان عام
-                                </button>
-                            </div>
-                            
-                            <!-- User Management Section (Hidden by default) -->
-                            <div id="admin-users-list-section" style="display: none; margin-top: 20px;">
-                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                                    <h5 style="color: #fff; margin: 0;">المستخدمين المسجلين</h5>
-                                    <button id="btn-admin-refresh-users" class="btn-icon" title="تحديث القائمة"><i data-lucide="refresh-cw"></i></button>
-                                </div>
-                                <div id="admin-users-list" style="max-height: 250px; overflow-y: auto; background: rgba(0,0,0,0.2); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px;">
-                                    <!-- Users populated here -->
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="profile-main-grid">
-                            <!-- Left Column -->
-                            <div class="profile-col">
-                                <!-- Premium Perks -->
-                                <div class="glass-panel perks-panel" style="direction: rtl;">
-                                    <h4 class="panel-title"
-                                        style="color: #c084fc; border-bottom: 1px solid rgba(168, 85, 247, 0.2); padding-bottom: 14px;">
-                                        <i data-lucide="sparkles"></i> مميزات حسابك النشط
-                                    </h4>
-                                    <div class="perks-grid">
-                                        <div class="perk-card">
-                                            <div class="perk-icon"
-                                                style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.2), rgba(16, 185, 129, 0.05)); color: #34d399;">
-                                                <i data-lucide="cloud"></i>
-                                            </div>
-                                            <div class="perk-text">
-                                                <span class="perk-title">مزامنة سحابية</span>
-                                                <span class="perk-desc">حفظ واستعادة بياناتك</span>
-                                            </div>
-                                        </div>
-                                        <div class="perk-card">
-                                            <div class="perk-icon"
-                                                style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(59, 130, 246, 0.05)); color: #60a5fa;">
-                                                <i data-lucide="zap"></i>
-                                            </div>
-                                            <div class="perk-text">
-                                                <span class="perk-title">سرعة قصوى</span>
-                                                <span class="perk-desc">تحميل بأقصى سرعة</span>
-                                            </div>
-                                        </div>
-                                        <div class="perk-card">
-                                            <div class="perk-icon"
-                                                style="background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(239, 68, 68, 0.05)); color: #f87171;">
-                                                <i data-lucide="life-buoy"></i>
-                                            </div>
-                                            <div class="perk-text">
-                                                <span class="perk-title">دعم مميز</span>
-                                                <span class="perk-desc">أولوية في الرد</span>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <!-- Chat Panel -->
-                                <div class="glass-panel support-panel"
-                                    style="display: flex; flex-direction: column; height: 350px;">
-                                    <h4 class="panel-title">
-                                        <i data-lucide="message-circle"></i> الدعم الفني (محادثة مباشرة)
-                                    </h4>
-                                    <div id="chat-messages" class="chat-messages-container"
-                                        style="flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px;">
-                                        <!-- Messages will appear here -->
-                                        <div class="chat-empty"
-                                            style="text-align: center; color: rgba(255,255,255,0.4); margin-top: auto; margin-bottom: auto;">
-                                            أرسل رسالتك وسنرد عليك في أقرب وقت.
-                                        </div>
-                                    </div>
-                                    <div class="chat-input-area" style="display: flex; gap: 8px; margin-top: 10px;">
-                                        <input type="text" id="chat-input" placeholder="اكتب رسالتك هنا..."
-                                            class="modern-input glass-input" style="flex: 1;">
-                                        <button id="btn-send-chat" class="btn-primary" style="padding: 0 16px;">
-                                            <i data-lucide="send" style="width: 18px; height: 18px;"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- Right Column -->
-                            <div class="profile-col">
-                                <!-- Inbox Section -->
-                                <div class="glass-panel inbox-panel"
-                                    style="height: 100%; display: flex; flex-direction: column;">
-                                    <h4 class="panel-title">
-                                        <i data-lucide="inbox"></i> صندوق الوارد
-                                    </h4>
-                                    <div id="inbox-messages" class="inbox-messages-container" style="flex: 1;">
-                                        <div id="inbox-empty" class="inbox-empty-msg">
-                                            لا توجد رسائل جديدة.
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
+                    <div class="remote-modal-body">
+                        <div id="announcement-body" class="announcement-text-content">
+                            <!-- Injected via JS -->
                         </div>
                     </div>
-
-
-
+                    <div class="remote-modal-actions">
+                        <button id="announcement-action-btn" class="btn-primary remote-action-btn"
+                            style="display: none;">
+                            <i data-lucide="external-link"></i> عرض التفاصيل
+                        </button>
+                        <button id="btn-dismiss-announcement" class="btn-primary remote-dismiss-btn">
+                            <i data-lucide="check"></i> حسناً، فهمت
+                        </button>
+                    </div>
                 </div>
             </div>
-        
-        <!-- Remote Admin Announcement Modal -->
-        <div id="announcement-modal" class="modal-overlay remote-admin-modal-overlay" style="display: none; z-index: 10001;" dir="rtl">
-            <div class="modal-content remote-admin-modal">
-                <button id="btn-close-announcement-modal" class="modal-close-btn" title="إغلاق">
-                    <i data-lucide="x"></i>
-                </button>
-                <div class="remote-modal-header">
-                    <div class="remote-modal-icon-wrapper">
-                        <i id="announcement-icon" data-lucide="bell" class="remote-modal-icon"></i>
-                    </div>
-                    <div class="remote-modal-title-group">
-                        <div class="badge-row">
-                            <span id="announcement-badge" class="ann-badge ann-badge-info">إشعار إداري</span>
-                            <span id="announcement-remaining" class="ann-remaining-text" style="display: none;"></span>
-                        </div>
-                        <h3 id="announcement-title">رسالة من الإدارة</h3>
-                    </div>
-                </div>
-                <div class="remote-modal-body">
-                    <div id="announcement-body" class="announcement-text-content">
-                        <!-- Injected via JS -->
-                    </div>
-                </div>
-                <div class="remote-modal-actions">
-                    <button id="announcement-action-btn" class="btn-primary remote-action-btn" style="display: none;">
-                        <i data-lucide="external-link"></i> عرض التفاصيل
-                    </button>
-                    <button id="btn-dismiss-announcement" class="btn-primary remote-dismiss-btn">
-                        <i data-lucide="check"></i> حسناً، فهمت
-                    </button>
-                </div>
-            </div>
-        </div>
 
-        <!-- Remote App Update Modal -->
-        <div id="update-modal" class="modal-overlay remote-admin-modal-overlay" style="display: none; z-index: 10002;" dir="rtl">
-            <div class="modal-content remote-admin-modal update-modal-style">
-                <button id="btn-close-update-modal" class="modal-close-btn" title="إغلاق">
-                    <i data-lucide="x"></i>
-                </button>
-                <div class="remote-modal-header">
-                    <div class="remote-modal-icon-wrapper update-icon-pulse">
-                        <i data-lucide="sparkles" class="remote-modal-icon"></i>
-                    </div>
-                    <div class="remote-modal-title-group">
-                        <div class="badge-row">
-                            <span class="ann-badge ann-badge-update">تحديث متاح 🎉</span>
-                            <span id="update-required-badge" class="ann-badge ann-badge-warning" style="display: none;">تحديث إلزامي</span>
-                        </div>
-                        <h3 style="margin: 4px 0 6px;">يتوفر إصدار جديد من البرنامج!</h3>
-                        <div class="update-version-chips">
-                            <span id="update-new-version" class="version-chip new-ver">v4.0.0</span>
-                            <span id="update-current-version" class="version-chip cur-ver">الإصدار الحالي: v3.9.0</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="remote-modal-body">
-                    <label class="update-section-label"><i data-lucide="list-checks"></i> ما الجديد في هذا التحديث:</label>
-                    <div id="update-changelog" class="update-changelog-box">
-                        <!-- Injected via JS -->
-                    </div>
-                </div>
-                <div class="remote-modal-actions">
-                    <button id="update-later-btn" class="btn-secondary" style="border-radius: 10px; padding: 10px 18px;">
-                        لاحقاً
+            <!-- Remote App Update Modal -->
+            <div id="update-modal" class="modal-overlay remote-admin-modal-overlay"
+                style="display: none; z-index: 10002;" dir="rtl">
+                <div class="modal-content remote-admin-modal update-modal-style">
+                    <button id="btn-close-update-modal" class="modal-close-btn" title="إغلاق">
+                        <i data-lucide="x"></i>
                     </button>
-                    <button id="update-download-btn" class="btn-primary update-action-download-btn">
-                        <i data-lucide="download-cloud"></i> تنزيل التحديث الآن (MediaFire)
-                    </button>
+                    <div class="remote-modal-header">
+                        <div class="remote-modal-icon-wrapper update-icon-pulse">
+                            <i data-lucide="sparkles" class="remote-modal-icon"></i>
+                        </div>
+                        <div class="remote-modal-title-group">
+                            <div class="badge-row">
+                                <span class="ann-badge ann-badge-update">تحديث متاح 🎉</span>
+                                <span id="update-required-badge" class="ann-badge ann-badge-warning"
+                                    style="display: none;">تحديث إلزامي</span>
+                            </div>
+                            <h3 style="margin: 4px 0 6px;">يتوفر إصدار جديد من البرنامج!</h3>
+                            <div class="update-version-chips">
+                                <span id="update-new-version" class="version-chip new-ver">v4.0.0</span>
+                                <span id="update-current-version" class="version-chip cur-ver">الإصدار الحالي:
+                                    v3.9.0</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="remote-modal-body">
+                        <label class="update-section-label"><i data-lucide="list-checks"></i> ما الجديد في هذا
+                            التحديث:</label>
+                        <div id="update-changelog" class="update-changelog-box">
+                            <!-- Injected via JS -->
+                        </div>
+                    </div>
+                    <div class="remote-modal-actions">
+                        <button id="update-later-btn" class="btn-secondary"
+                            style="border-radius: 10px; padding: 10px 18px;">
+                            لاحقاً
+                        </button>
+                        <button id="update-download-btn" class="btn-primary update-action-download-btn">
+                            <i data-lucide="download-cloud"></i> تنزيل التحديث الآن (MediaFire)
+                        </button>
+                    </div>
                 </div>
             </div>
-        </div>
 
         </main>
     </div>
@@ -1471,11 +1504,14 @@
     <script src="firebase_app.js"></script>
 
     <script src="renderer.js"></script>
+    <script src="library-hub.js"></script>
     <script src="announcements.js"></script>
-    
+
     <!-- Drag and Drop Overlay -->
-    <div id="drag-drop-overlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; backdrop-filter: blur(8px);">
-        <i data-lucide="download-cloud" style="width: 64px; height: 64px; color: var(--accent-primary); margin-bottom: 20px;"></i>
+    <div id="drag-drop-overlay"
+        style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 9999; flex-direction: column; justify-content: center; align-items: center; backdrop-filter: blur(8px);">
+        <i data-lucide="download-cloud"
+            style="width: 64px; height: 64px; color: var(--accent-primary); margin-bottom: 20px;"></i>
         <h2 style="color: white; font-size: 24px;">Drop Link Here</h2>
         <p style="color: var(--text-muted);">to quickly add a new download</p>
     </div>

@@ -3,25 +3,26 @@
    ========================================================= */
 
 :root {
-    --bg-card: rgba(13, 16, 26, 0.94);
-    --bg-item: rgba(22, 27, 44, 0.7);
-    --bg-item-hover: rgba(30, 37, 60, 0.9);
-    --border-card: rgba(255, 255, 255, 0.1);
-    --border-item: rgba(255, 255, 255, 0.06);
+    color-scheme: light;
+    --bg-card: rgba(255, 255, 255, 0.96);
+    --bg-item: rgba(255, 255, 255, 0.82);
+    --bg-item-hover: rgba(0, 0, 0, 0.045);
+    --border-card: rgba(0, 0, 0, 0.24);
+    --border-item: rgba(0, 0, 0, 0.16);
     
-    --accent: #38bdf8;
-    --accent-glow: rgba(56, 189, 248, 0.35);
-    --accent-gradient: linear-gradient(90deg, #38bdf8 0%, #818cf8 50%, #c084fc 100%);
+    --accent: #111111;
+    --accent-glow: rgba(0, 0, 0, 0.16);
+    --accent-gradient: linear-gradient(90deg, #111111 0%, #000000 100%);
     
-    --success: #10b981;
-    --warning: #f59e0b;
-    --danger: #ef4444;
+    --success: #111111;
+    --warning: #555555;
+    --danger: #111111;
     
-    --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
+    --text-primary: #111111;
+    --text-secondary: #333333;
+    --text-muted: #666666;
     
-    --shadow-float: 0 16px 40px -10px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.1);
+    --shadow-float: 0 16px 40px -10px rgba(0, 0, 0, 0.24), 0 0 0 1px rgba(0, 0, 0, 0.12);
 }
 
 *, *::before, *::after {
@@ -456,3 +457,39 @@ html, body {
     from { opacity: 0; transform: translateY(4px); }
     to { opacity: 1; transform: translateY(0); }
 }
+
+/* Monochrome monitor theme to match Quick Add. */
+.mini-card, .mini-pill { background: var(--bg-card); border-color: #111; }
+.mini-card { backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+.card-header { background: var(--bg-item); border-bottom-color: #111; }
+.header-title, .dl-name, .dl-percent-val { color: #111; }
+.status-pulse { background: #111; box-shadow: 0 0 7px rgba(0,0,0,.22); }
+.status-pulse.paused { background: #666; box-shadow: 0 0 5px rgba(0,0,0,.14); }
+.status-pulse.offline { background: #aaa; box-shadow: 0 0 5px rgba(0,0,0,.12); }
+.total-speed-badge, .dl-speed-val, .pill-icon, .pill-speed { color: #111; }
+.total-speed-badge { background: rgba(0,0,0,.045); border-color: rgba(0,0,0,.24); }
+.btn-bulk { background: #111; border-color: #111; color: #fff; }
+.btn-bulk:hover { background: #000; }
+.btn-bulk:disabled { background: #555; border-color: #555; color: #fff; }
+.btn-icon-hdr, .btn-pill-expand { color: #111; }
+.btn-icon-hdr:hover { background: rgba(0,0,0,.07); color: #000; }
+.btn-icon-hdr.close-hdr:hover { background: rgba(0,0,0,.1); color: #000; }
+.downloads-container::-webkit-scrollbar-thumb { background: rgba(0,0,0,.3); }
+.dl-item { background: var(--bg-item); border-color: #999; }
+.dl-item:hover { background: var(--bg-item-hover); border-color: #111; }
+.dl-type-badge { background: rgba(0,0,0,.06); color: #111; }
+.dl-state, .dl-state.downloading, .dl-state.processing, .dl-state.starting, .dl-state.paused, .dl-state.error { color: #444; }
+.dl-btn { background: #fff; border-color: #111; color: #111; }
+.dl-btn:hover, .dl-btn.cancel-btn:hover { background: #111; color: #fff; }
+.progress-track { background: rgba(0,0,0,.12); }
+.progress-fill { background: #111; box-shadow: 0 0 6px rgba(0,0,0,.16); }
+.progress-fill::after { background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.22) 50%, transparent 100%); }
+.completion-banner { background: var(--bg-item); border-top-color: #111; }
+.completion-icon { color: #111; display: flex; align-items: center; }
+.completion-title { color: #111; }
+.completion-subtitle { color: #555; }
+.btn-open-folder { background: #111; border-color: #111; color: #fff; }
+.btn-open-folder:hover { background: #000; }
+.mini-pill { color: #111; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+.mini-pill:hover { border-color: #000; }
+.pill-text { color: #111; }

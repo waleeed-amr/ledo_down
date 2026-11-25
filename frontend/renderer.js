@@ -51,6 +51,23 @@ if (window.electronAPI && window.electronAPI.onWindowFocusChange) {
     });
 }
 
+// Sync maximize button icon with actual window state
+window.electronAPI?.onWindowMaximizedChange?.((isMaximized) => {
+    const btn = document.getElementById('btn-maximize');
+    if (!btn) return;
+    const svg = btn.querySelector('svg');
+    if (svg) {
+        if (isMaximized) {
+            // Restore icon (two overlapping squares)
+            svg.innerHTML = '<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>';
+        } else {
+            // Maximize icon (single square)
+            svg.innerHTML = '<rect x="1" y="1" width="10" height="10" rx="2" stroke="currentColor" stroke-width="1.5" fill="none"/>';
+        }
+    }
+    btn.title = isMaximized ? 'Restore' : 'Maximize';
+});
+
 // ============================================
 // SETTINGS MANAGEMENT
 // ============================================
@@ -59,7 +76,7 @@ const DEFAULT_SETTINGS = {
     powerSaver: false,
     reduceHover: false,
     compactMode: false,
-    theme: 'dark',
+    theme: 'cyberpunk',
     customBackground: null,
     accentColor: '#3b82f6',
     defaultQuality: 'best',
@@ -96,7 +113,289 @@ function saveSettings(settings) {
     }
 }
 
+let telegramPairingWatchTimer = null;
+
+async function refreshTelegramSettings() {
+    const status = document.getElementById('telegram-connection-status');
+    if (!status || !window.electronAPI?.getTelegramConfig) return;
+    const config = await window.electronAPI.getTelegramConfig().catch(() => null);
+    if (!config) {
+        status.textContent = 'تعذر قراءة حالة الربط.';
+        return;
+    }
+    const disconnectButton = document.getElementById('btn-disconnect-telegram');
+    if (disconnectButton) disconnectButton.hidden = !config.configured;
+    const linkButton = document.getElementById('btn-auto-link-telegram');
+    if (linkButton) linkButton.textContent = config.linked ? 'تغيير البوت' : 'ربط البوت وفتحه';
+    if (!config.encryptionAvailable) {
+        status.textContent = 'التخزين المشفّر غير متاح على هذا الجهاز؛ لن يُحفظ التوكن.';
+        return;
+    }
+    status.textContent = config.awaitingPairing
+        ? `افتح محادثة @${config.botUsername} واضغط «بدء» مرة واحدة لإكمال الربط.`
+        : config.linked
+            ? `@${config.botUsername} مربوط ومتاح لأي شخص يراسله في محادثة خاصة. شارك اسم البوت مع من تريد. ${config.pendingCount ? `يوجد ${config.pendingCount} ملف بانتظار الإرسال.` : 'أرسل /help لعرض الأوامر.'}`
+            : config.configured
+                ? 'التوكن محفوظ. اضغط «ربط البوت وفتحه» لإكمال الربط.'
+                : 'الصق توكن البوت للبدء.';
+
+    if (config.awaitingPairing && !telegramPairingWatchTimer) {
+        telegramPairingWatchTimer = setInterval(async () => {
+            const latest = await window.electronAPI.getTelegramConfig().catch(() => null);
+            if (!latest?.awaitingPairing) {
+                clearInterval(telegramPairingWatchTimer);
+                telegramPairingWatchTimer = null;
+                refreshTelegramSettings();
+            }
+        }, 2500);
+    }
+}
+
+const TELEGRAM_ADMIN_DEFAULTS = {
+    enabled: true, allowVideo: true, allowAudio: true, allowDirectFiles: true,
+    allowMultipleLinks: true, maxLinks: 5, maxFileSizeMB: 50, pollIntervalSeconds: 3,
+    videoQualities: ['best', '1080p', '720p', '480p', '360p'],
+    audioFormats: ['audio-mp3', 'audio-m4a'], welcomeMessage: '', helpMessage: ''
+};
+let telegramAdminUnsubscribe = null;
+let botActivityUnsubscribe = null;
+let activeFirebaseUid = '';
+let telegramUserReady = false;
+const botActivityState = { items: [], unread: 0, lastSynced: new Map() };
+
+function renderBotActivity() {
+    const list = document.getElementById('bot-activity-list');
+    const badge = document.getElementById('bot-activity-badge');
+    if (badge) {
+        badge.hidden = botActivityState.unread <= 0;
+        badge.textContent = botActivityState.unread > 99 ? '99+' : String(botActivityState.unread);
+    }
+    if (!list) return;
+    list.replaceChildren();
+    if (!botActivityState.items.length) {
+        const empty = document.createElement('div');
+        empty.className = 'bot-activity-empty';
+        empty.textContent = 'لا توجد تنزيلات من البوت حتى الآن.';
+        list.appendChild(empty);
+        return;
+    }
+    for (const item of botActivityState.items.slice(0, 30)) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'bot-activity-item';
+        const icon = document.createElement('span');
+        icon.className = 'bot-activity-icon';
+        icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"></path><path d="M22 2 11 13"></path></svg>';
+        const copy = document.createElement('span');
+        copy.className = 'bot-activity-copy';
+        const title = document.createElement('span');
+        title.className = 'bot-activity-title';
+        title.textContent = item.title || 'تنزيل من بوت تيليجرام';
+        const meta = document.createElement('span');
+        meta.className = 'bot-activity-meta';
+        const statusLabel = item.status === 'completed' ? 'اكتمل' : item.status === 'error' ? 'فشل' : `جارٍ التنزيل ${Math.round(Number(item.progress) || 0)}٪`;
+        meta.textContent = `${statusLabel} · ${item.updatedAt || 'الآن'}`;
+        copy.append(title, meta);
+        button.append(icon, copy);
+        button.addEventListener('click', () => {
+            document.getElementById('btn-bot-activity')?.click();
+            document.getElementById('nav-downloads')?.click();
+            setTimeout(() => document.getElementById(`dl-card-${item.downloadId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 250);
+        });
+        list.appendChild(button);
+    }
+}
+
+function updateBotActivity(download, { notify = false, sync = true } = {}) {
+    if (!download?.id) return;
+    const id = String(download.id);
+    const title = String(download.filename || download.title || 'تنزيل من بوت تيليجرام');
+    const existingIndex = botActivityState.items.findIndex(item => String(item.downloadId) === id);
+    const item = {
+        downloadId: id, title, status: download.status || 'starting',
+        progress: Number(download.progress) || 0, updatedMs: Date.now(),
+        updatedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    if (existingIndex >= 0) botActivityState.items.splice(existingIndex, 1);
+    botActivityState.items.unshift(item);
+    botActivityState.items = botActivityState.items.slice(0, 30);
+    if (notify) botActivityState.unread += 1;
+    renderBotActivity();
+    if (notify) {
+        const label = item.status === 'completed' ? 'اكتمل تنزيل البوت' : item.status === 'error' ? 'فشل تنزيل البوت' : 'بدأ تنزيل من البوت';
+        showToast(`${label}: ${title}`, item.status === 'error' ? '#ef4444' : item.status === 'completed' ? '#10b981' : '#3b82f6', 6500);
+        if ((!windowIsVisible || !isAppFocused) && appSettings.completionNotif !== false) {
+            window.electronAPI?.showNotification?.('Ledo · Telegram Bot', `${label}: ${title}`);
+        }
+    }
+    if (!sync || !telegramUserReady || !window.firebaseApp?.syncBotActivity) return;
+    const previous = botActivityState.lastSynced.get(id);
+    const progressBucket = Math.floor(item.progress / 10);
+    const shouldSync = !previous || previous.status !== item.status || previous.progressBucket !== progressBucket || Date.now() - previous.at > 20000;
+    if (!shouldSync) return;
+    botActivityState.lastSynced.set(id, { status: item.status, progressBucket, at: Date.now() });
+    window.firebaseApp.syncBotActivity(download, item.progress).catch(error => {
+        const syncStatus = document.getElementById('bot-activity-sync-status');
+        if (syncStatus) syncStatus.textContent = 'المزامنة غير متاحة الآن؛ سيبقى التنزيل ظاهرًا على هذا الجهاز.';
+        console.debug('Telegram activity cloud sync skipped:', error.message);
+    });
+}
+
+function applyTelegramAdminForm(settings = TELEGRAM_ADMIN_DEFAULTS) {
+    const data = { ...TELEGRAM_ADMIN_DEFAULTS, ...(settings || {}) };
+    const setChecked = (id, value) => { const el = document.getElementById(id); if (el) el.checked = value !== false; };
+    setChecked('admin-bot-enabled', data.enabled);
+    setChecked('admin-bot-video', data.allowVideo);
+    setChecked('admin-bot-audio', data.allowAudio);
+    setChecked('admin-bot-direct', data.allowDirectFiles);
+    setChecked('admin-bot-multiple', data.allowMultipleLinks);
+    const maxLinks = document.getElementById('admin-bot-max-links'); if (maxLinks) maxLinks.value = String(data.maxLinks || 5);
+    const maxSize = document.getElementById('admin-bot-max-size'); if (maxSize) maxSize.value = String(data.maxFileSizeMB || 50);
+    const poll = document.getElementById('admin-bot-poll'); if (poll) poll.value = String(data.pollIntervalSeconds || 3);
+    document.querySelectorAll('[data-video-quality]').forEach(el => { el.checked = (data.videoQualities || TELEGRAM_ADMIN_DEFAULTS.videoQualities).includes(el.dataset.videoQuality); });
+    document.querySelectorAll('[data-audio-format]').forEach(el => { el.checked = (data.audioFormats || TELEGRAM_ADMIN_DEFAULTS.audioFormats).includes(el.dataset.audioFormat); });
+    const welcome = document.getElementById('admin-bot-welcome'); if (welcome) welcome.value = data.welcomeMessage || '';
+    const help = document.getElementById('admin-bot-help'); if (help) help.value = data.helpMessage || '';
+}
+
+function collectTelegramAdminForm() {
+    const checked = id => !!document.getElementById(id)?.checked;
+    return {
+        enabled: checked('admin-bot-enabled'), allowVideo: checked('admin-bot-video'), allowAudio: checked('admin-bot-audio'),
+        allowDirectFiles: checked('admin-bot-direct'), allowMultipleLinks: checked('admin-bot-multiple'),
+        maxLinks: Number(document.getElementById('admin-bot-max-links')?.value || 5),
+        maxFileSizeMB: Number(document.getElementById('admin-bot-max-size')?.value || 50),
+        pollIntervalSeconds: Number(document.getElementById('admin-bot-poll')?.value || 3),
+        videoQualities: Array.from(document.querySelectorAll('[data-video-quality]:checked'), el => el.dataset.videoQuality),
+        audioFormats: Array.from(document.querySelectorAll('[data-audio-format]:checked'), el => el.dataset.audioFormat),
+        welcomeMessage: document.getElementById('admin-bot-welcome')?.value || '',
+        helpMessage: document.getElementById('admin-bot-help')?.value || ''
+    };
+}
+
+async function bindFirebaseBotSync(user) {
+    const uid = user?.uid || '';
+    if (uid === activeFirebaseUid && (telegramAdminUnsubscribe || botActivityUnsubscribe)) return;
+    activeFirebaseUid = uid;
+    telegramAdminUnsubscribe?.(); telegramAdminUnsubscribe = null;
+    botActivityUnsubscribe?.(); botActivityUnsubscribe = null;
+    telegramUserReady = !!user && !!window.firebaseApp;
+    if (!telegramUserReady) return;
+    telegramAdminUnsubscribe = window.firebaseApp.listenTelegramAdminSettings(async cloudSettings => {
+        const effectiveSettings = { ...TELEGRAM_ADMIN_DEFAULTS, ...(cloudSettings || {}) };
+        applyTelegramAdminForm(effectiveSettings);
+        await window.electronAPI?.applyTelegramAdminSettings?.(effectiveSettings).catch(() => {});
+        const stamp = cloudSettings?.updatedAt?.toDate?.();
+        const syncTime = document.getElementById('telegram-admin-sync-time');
+        if (syncTime) syncTime.textContent = stamp ? stamp.toLocaleString() : 'تمت المزامنة';
+        const activityStatus = document.getElementById('bot-activity-sync-status');
+        if (activityStatus) activityStatus.textContent = 'إعداداتك وسجل تنزيلات بوتك يتزامنان في مساحة Firebase الخاصة بك.';
+    }, error => {
+        const activityStatus = document.getElementById('bot-activity-sync-status');
+        if (activityStatus) activityStatus.textContent = 'تعذر الاتصال بالمزامنة السحابية.';
+        console.debug('Telegram bot config sync unavailable:', error.message);
+    });
+    botActivityUnsubscribe = window.firebaseApp.listenBotActivity(items => {
+        const local = botActivityState.items;
+        const cloud = items.map(item => ({
+            downloadId: item.downloadId, title: item.title, status: item.status, progress: item.progress,
+            updatedMs: item.updatedAt?.toDate?.().getTime?.() || Number(item.createdAtMs) || 0,
+            updatedAt: item.updatedAt?.toDate?.().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) || ''
+        }));
+        const merged = new Map([...local, ...cloud].map(item => [String(item.downloadId), item]));
+        botActivityState.items = Array.from(merged.values()).sort((a, b) => (b.updatedMs || 0) - (a.updatedMs || 0)).slice(0, 30);
+        renderBotActivity();
+    }, error => console.debug('Telegram activity sync unavailable:', error.message));
+    for (const item of botActivityState.items) {
+        window.firebaseApp.syncBotActivity({
+            id: item.downloadId, filename: item.title, status: item.status, progress: item.progress
+        }, item.progress).catch(error => console.debug('Could not sync existing Telegram activity:', error.message));
+    }
+}
+
+async function initializeFirebaseBotSync() {
+    if (!window.firebaseApp) return;
+    try {
+        await window.firebaseApp.ready;
+        await bindFirebaseBotSync(window.firebaseApp.auth.currentUser);
+        window.firebaseApp.auth.onAuthStateChanged(user => bindFirebaseBotSync(user).catch(error => console.debug('Firebase bot sync rebind failed:', error)));
+    } catch (error) {
+        const status = document.getElementById('bot-activity-sync-status');
+        if (status) status.textContent = 'المزامنة السحابية غير متاحة؛ ستظل التنبيهات على هذا الجهاز.';
+    }
+}
+
+document.getElementById('btn-save-telegram-admin-settings')?.addEventListener('click', async event => {
+    const button = event.currentTarget;
+    const status = document.getElementById('telegram-admin-save-status');
+    const settings = collectTelegramAdminForm();
+    button.disabled = true;
+    if (status) status.textContent = 'جارٍ حفظ إعدادات بوتك ومزامنتها…';
+    try {
+        if (!window.electronAPI?.applyTelegramAdminSettings) throw new Error('تعذر حفظ الإعدادات على هذا الجهاز.');
+        await window.electronAPI.applyTelegramAdminSettings(settings);
+        try {
+            if (!window.firebaseApp?.setTelegramAdminSettings) throw new Error('Firebase غير متصل.');
+            await window.firebaseApp.setTelegramAdminSettings(settings);
+            if (status) status.textContent = 'تم حفظ إعدادات بوتك ومزامنتها مع نسخ التطبيق المرتبطة بحسابك.';
+        } catch (syncError) {
+            if (status) status.textContent = `تم الحفظ على هذا الجهاز؛ تعذرت المزامنة السحابية الآن (${syncError.message || 'تحقق من الاتصال'}).`;
+        }
+    } catch (error) {
+        if (status) status.textContent = error.message || 'تعذر حفظ إعدادات البوت.';
+    } finally { button.disabled = false; }
+});
+
+document.getElementById('btn-bot-activity')?.addEventListener('click', event => {
+    const button = event.currentTarget;
+    const popover = document.getElementById('bot-activity-popover');
+    const open = popover.hidden;
+    popover.hidden = !open;
+    button.setAttribute('aria-expanded', String(open));
+    if (open) { botActivityState.unread = 0; renderBotActivity(); }
+});
+document.getElementById('btn-clear-bot-activity')?.addEventListener('click', () => { botActivityState.unread = 0; renderBotActivity(); });
+document.addEventListener('click', event => {
+    const menu = document.querySelector('.bot-activity-menu');
+    if (menu && !menu.contains(event.target)) {
+        const popover = document.getElementById('bot-activity-popover');
+        popover.hidden = true;
+        document.getElementById('btn-bot-activity')?.setAttribute('aria-expanded', 'false');
+    }
+});
+initializeFirebaseBotSync();
+
+document.getElementById('btn-auto-link-telegram')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const tokenInput = document.getElementById('telegram-bot-token');
+    button.disabled = true;
+    try {
+        const result = await window.electronAPI?.beginTelegramPairing?.({ token: tokenInput?.value || '' });
+        if (!result?.success) throw new Error(result?.error || 'تعذر بدء الربط التلقائي.');
+        const opened = await window.electronAPI?.openExternal?.(result.link);
+        if (!opened) throw new Error('تم حفظ التوكن، لكن تعذر فتح رابط البوت. افتح الرابط من تيليجرام يدويًا.');
+        if (tokenInput) tokenInput.value = '';
+        await refreshTelegramSettings();
+        showToast('افتح محادثة البوت واضغط «بدء» لإكمال الربط.', '#10b981', 7000);
+    } catch (error) {
+        showToast(error.message || 'تعذر بدء الربط التلقائي.', '#ef4444', 7000);
+    } finally { button.disabled = false; }
+});
+
+document.getElementById('btn-disconnect-telegram')?.addEventListener('click', async () => {
+    await window.electronAPI?.disconnectTelegram?.();
+    document.getElementById('telegram-bot-token').value = '';
+    await refreshTelegramSettings();
+    showToast('تم إلغاء ربط تيليجرام وحذف الطلبات المعلّقة.', '#f59e0b');
+});
+
+refreshTelegramSettings();
+
 let appSettings = loadSettings();
+if (!['light', 'cyberpunk'].includes(appSettings.theme)) {
+    appSettings.theme = 'cyberpunk';
+    saveSettings(appSettings);
+}
 
 window.electronAPI?.onSmartPasteDetected?.(async (rawUrl) => {
     const url = String(rawUrl || '').trim();
@@ -145,20 +444,6 @@ function applySettings() {
     document.body.classList.toggle('power-saver', !!appSettings.powerSaver);
     document.body.classList.toggle('reduce-hover', !!appSettings.reduceHover);
     document.body.classList.toggle('compact-mode', !!appSettings.compactMode);
-    // Power Saver
-    if (appSettings.powerSaver) {
-        document.body.classList.add('power-saver');
-    } else {
-        document.body.classList.remove('power-saver');
-    }
-
-    // Reduce Hover
-    if (appSettings.reduceHover) {
-        document.body.classList.add('reduce-hover');
-    } else {
-        document.body.classList.remove('reduce-hover');
-    }
-
     // Checkboxes
     const cbPower = document.getElementById('checkbox-power-saver');
     const cbHover = document.getElementById('checkbox-reduce-hover');
@@ -174,15 +459,18 @@ function applySettings() {
         document.body.classList.remove('compact-mode');
     }
 
-    // Apply the selected theme consistently on load, reset, and theme changes.
+    // Only the two user-facing themes remain: the selected Cyberpunk theme and Light.
     document.body.classList.remove('theme-light', 'theme-amoled', 'theme-cyberpunk');
-    if (appSettings.theme === 'light' || (appSettings.theme === 'system' && window.matchMedia?.('(prefers-color-scheme: light)').matches)) {
-        document.body.classList.add('theme-light');
-    } else if (appSettings.theme === 'amoled') {
-        document.body.classList.add('theme-amoled');
-    } else if (appSettings.theme === 'cyberpunk') {
-        document.body.classList.add('theme-cyberpunk');
-    }
+    document.body.classList.add(appSettings.theme === 'light' ? 'theme-light' : 'theme-cyberpunk');
+    document.querySelectorAll('.theme-card-option').forEach(card => {
+        card.classList.toggle('active', card.getAttribute('data-theme-val') === appSettings.theme);
+    });
+    const lightThemeButton = document.getElementById('btn-theme-light');
+    const cyberpunkThemeButton = document.getElementById('btn-theme-cyberpunk');
+    lightThemeButton?.classList.toggle('is-active', appSettings.theme === 'light');
+    cyberpunkThemeButton?.classList.toggle('is-active', appSettings.theme === 'cyberpunk');
+    lightThemeButton?.setAttribute('aria-pressed', appSettings.theme === 'light' ? 'true' : 'false');
+    cyberpunkThemeButton?.setAttribute('aria-pressed', appSettings.theme === 'cyberpunk' ? 'true' : 'false');
     if (appSettings.accentColor) {
         document.documentElement.style.setProperty('--accent-primary', appSettings.accentColor);
     }
@@ -209,11 +497,6 @@ function applySettings() {
     // Update save path display in downloads view
     updateSavePathDisplay();
 }
-
-const systemThemePreference = window.matchMedia?.('(prefers-color-scheme: light)');
-systemThemePreference?.addEventListener?.('change', () => {
-    if (appSettings.theme === 'system') applySettings();
-});
 
 // Update the displayed active save path
 function updateSavePathDisplay() {
@@ -257,6 +540,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     applySettings();
     initVanta();
 
+    // ── Startup overlay: hide smoothly once backend is ready ──
+    const _startupOverlay = document.getElementById('startup-overlay');
+    const _startupStatus = document.getElementById('startup-status-text');
+    if (_startupOverlay) {
+        window.electronAPI?.onBackendStartupProgress?.((data) => {
+            if (_startupStatus) {
+                if (data?.status === 'starting') _startupStatus.textContent = 'Starting download engine…';
+                else if (data?.status === 'ready') _startupStatus.textContent = 'Ready!';
+            }
+        });
+        backendReadyPromise.then(() => {
+            if (_startupStatus) _startupStatus.textContent = 'Ready!';
+            _startupOverlay.classList.add('backend-ready');
+            setTimeout(() => {
+                if (_startupOverlay) {
+                    _startupOverlay.classList.add('hidden');
+                    setTimeout(() => { if (_startupOverlay && _startupOverlay.parentNode) _startupOverlay.remove(); }, 500);
+                }
+            }, 300);
+        }).catch(() => {
+            if (_startupStatus) _startupStatus.textContent = 'Engine error — restart app';
+            setTimeout(() => {
+                if (_startupOverlay) _startupOverlay.classList.add('hidden');
+            }, 3000);
+        });
+        if (!window.electronAPI) {
+            _startupOverlay.classList.add('hidden');
+        }
+    }
+
     // Initialize Lucide Icons
     if (window.lucide) lucide.createIcons();
 
@@ -291,11 +604,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 // Settings Event Listeners
 document.getElementById('checkbox-power-saver')?.addEventListener('change', (e) => {
     appSettings.powerSaver = e.target.checked;
-    document.body.classList.toggle('power-saver', e.target.checked);
     saveSettings(appSettings);
     applySettings();
-    initVanta();
-    showToast(e.target.checked ? 'Power Saver Mode: ON' : 'Power Saver Mode: OFF', e.target.checked ? '#10b981' : '#6366f1');
+    showToast(
+        e.target.checked
+            ? 'تم تفعيل توفير الطاقة: أُوقفت تأثيرات الزجاج والحركة وخُفّض تحديث الرسوم.'
+            : 'تم إيقاف وضع توفير الطاقة واستعادة تأثيرات الواجهة.',
+        e.target.checked ? '#10b981' : '#6366f1',
+        4500
+    );
 });
 
 document.getElementById('checkbox-reduce-hover')?.addEventListener('change', (e) => {
@@ -466,36 +783,19 @@ document.querySelector('.settings-nav-tabs')?.addEventListener('keydown', (e) =>
 // ============================================
 // THEME CARD SELECTION
 // ============================================
+function setAppTheme(theme) {
+    if (!['light', 'cyberpunk'].includes(theme)) return;
+    appSettings.theme = theme;
+    saveSettings(appSettings);
+    applySettings();
+    initVanta();
+    showToast('تم تغيير الثيم', theme === 'light' ? '#2563eb' : '#a855f7');
+}
+
 document.querySelectorAll('.theme-card-option').forEach(card => {
     card.addEventListener('click', () => {
         const themeVal = card.getAttribute('data-theme-val');
-        if (!themeVal) return;
-
-        // Update active state visually
-        document.querySelectorAll('.theme-card-option').forEach(c => c.classList.remove('active'));
-        card.classList.add('active');
-
-        // Apply theme
-        appSettings.theme = themeVal;
-        saveSettings(appSettings);
-
-        // Handle specific theme classes
-        document.body.classList.remove('theme-light', 'theme-amoled', 'theme-cyberpunk');
-        if (themeVal === 'light') {
-            document.body.classList.add('theme-light');
-        } else if (themeVal === 'amoled') {
-            document.body.classList.add('theme-amoled');
-        } else if (themeVal === 'cyberpunk') {
-            document.body.classList.add('theme-cyberpunk');
-        } else if (themeVal === 'system') {
-            // Match system preference
-            if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-                document.body.classList.add('theme-light');
-            }
-        }
-
-        initVanta();
-        showToast(`تم تغيير الثيم`, '#3b82f6');
+        setAppTheme(themeVal);
     });
 });
 
@@ -724,7 +1024,18 @@ document.getElementById('btn-test-extension-conn')?.addEventListener('click', as
         if (backend && !backend.success) throw new Error('محرك التحميل لم يبدأ بنجاح.');
         const res = await axios.get('http://127.0.0.1:8000/api/health', { timeout: 5000 });
         if (res.status === 200 && res.data?.status === 'ok') {
-            showToast('✅ ملفات الإضافة سليمة والمحرك متصل. تأكد من تفعيل الإضافة داخل المتصفح.', '#10b981');
+            const diagnostics = res.data?.diagnostics || {};
+            if (diagnostics.database === 'error' || diagnostics.download_storage === 'unavailable') {
+                const issue = diagnostics.database === 'error'
+                    ? 'قاعدة بيانات التحميلات لا تستجيب.'
+                    : `مجلد الحفظ غير متاح: ${diagnostics.download_path || ''}`;
+                showToast(`المحرك متصل، لكن ${issue}`, '#f59e0b', 6000);
+            } else {
+                const storageMessage = diagnostics.download_storage === 'will_create'
+                    ? 'سيُنشأ مجلد الحفظ عند أول تنزيل.'
+                    : 'مجلد الحفظ جاهز.';
+                showToast(`المحرك وقاعدة البيانات يعملان. ${storageMessage} ${diagnostics.active_downloads || 0} تنزيل نشط.`, '#10b981', 6000);
+            }
         } else {
             throw new Error('استجابة المحرك غير متوقعة.');
         }
@@ -857,8 +1168,12 @@ const autoRetryTimers = new Map();
 function scheduleAutomaticRetry(download) {
     if (appSettings.autoRetry === false || !download?.id || autoRetryTimers.has(download.id)) return;
     const message = String(download.error_message || '').toLowerCase();
-    if (/\b(401|403|404)\b|expired|login|cookie|not found|unsupported|invalid url/.test(message)) return;
-    if (!/network|timeout|timed out|connection|temporar|disconnected|http 5\d\d|http 429|status 0/.test(message)) return;
+    if (download.retryable === true) {
+        // The backend has already classified this failure as safe to retry.
+    } else {
+        if (/\b(401|403|404)\b|expired|login|cookie|not found|unsupported|invalid url/.test(message)) return;
+        if (!/network|timeout|timed out|connection|temporar|disconnected|http 5\d\d|http 429|status 0/.test(message)) return;
+    }
 
     const attempts = autoRetryAttempts.get(download.id) || 0;
     if (attempts >= 3) return;
@@ -882,6 +1197,8 @@ let rawDownloadsData = [];
 let currentFilter = 'all';
 let currentSort = 'date-desc';
 let currentDownloadSearch = '';
+const DOWNLOAD_HISTORY_PAGE_SIZE = 15;
+let downloadHistoryLimit = DOWNLOAD_HISTORY_PAGE_SIZE;
 let bulkDownloadActionPending = false;
 window.speedHistory = {}; // { id: [speed_bytes_1, speed_bytes_2, ...] }
 window.progressHistory = {}; // { id: [{ progress, at }, ...] }
@@ -889,6 +1206,7 @@ window.progressHistory = {}; // { id: [{ progress, at }, ...] }
 function processDownloadsState(downloads) {
     if (!Array.isArray(downloads)) return;
     rawDownloadsData = downloads;
+    window.LedoLibraryHub?.update(downloads);
     updateDownloadOverview(downloads);
     handleAutoResume(downloads);
 
@@ -946,6 +1264,17 @@ function updateDownloadOverview(downloads) {
     if (transferredEl) transferredEl.textContent = formatBytes(totalTransferred);
     if (speedEl) speedEl.textContent = `${formatBytes(currentSpeed)}/s`;
     if (queuedEl) queuedEl.textContent = `${queued.length} waiting in queue`;
+
+    const filterCounts = {
+        all: downloads.length,
+        downloading: downloads.filter(d => ['downloading', 'starting', 'resolving', 'preparing', 'processing'].includes(d.status)).length,
+        completed: completed.length,
+        error: downloads.filter(d => d.status === 'error').length
+    };
+    Object.entries(filterCounts).forEach(([filter, count]) => {
+        const countEl = document.querySelector(`[data-count-for="${filter}"]`);
+        if (countEl) countEl.textContent = String(count);
+    });
 }
 
 function updateRecentCompleted() {
@@ -992,9 +1321,12 @@ function updateRecentCompleted() {
 
 function applyFilterAndSort() {
     let result = [...rawDownloadsData];
+    const toolsViewOpen = document.getElementById('view-tools')?.classList.contains('active');
 
-    // Filter
-    if (currentFilter === 'downloading') {
+    // Keep only live cards attached while the lightweight tools workspace is open.
+    if (toolsViewOpen) {
+        result = result.filter(d => ['downloading', 'starting', 'resolving', 'preparing', 'processing'].includes(d.status));
+    } else if (currentFilter === 'downloading') {
         result = result.filter(d => ['downloading', 'starting', 'resolving', 'preparing', 'processing'].includes(d.status));
     } else if (currentFilter === 'completed') {
         result = result.filter(d => d.status === 'completed');
@@ -1007,8 +1339,8 @@ function applyFilterAndSort() {
             .some(value => String(value || '').toLocaleLowerCase().includes(currentDownloadSearch)));
     }
 
-    // Sort
-    result.sort((a, b) => {
+    // Sort once, then keep the live queue visible while paging through older history.
+    const compareDownloads = (a, b) => {
         if (currentSort === 'size-desc') {
             return (b.total_size || 0) - (a.total_size || 0);
         } else if (currentSort === 'speed-desc') {
@@ -1020,9 +1352,25 @@ function applyFilterAndSort() {
         }
         // date-desc (default: newest downloads first)
         return (Number(b.created_at) || 0) - (Number(a.created_at) || 0);
-    });
+    };
+    result.sort(compareDownloads);
 
-    renderDownloads(result);
+    const liveStatuses = ['downloading', 'starting', 'resolving', 'preparing', 'processing'];
+    const canPageHistory = !toolsViewOpen && currentFilter !== 'downloading';
+    let pagination = null;
+    if (canPageHistory) {
+        const live = result.filter(download => liveStatuses.includes(download.status));
+        const history = result.filter(download => !liveStatuses.includes(download.status));
+        const visibleHistory = history.slice(0, downloadHistoryLimit);
+        result = [...live, ...visibleHistory].sort(compareDownloads);
+        pagination = {
+            total: history.length,
+            visible: visibleHistory.length,
+            hasMore: history.length > visibleHistory.length
+        };
+    }
+
+    renderDownloads(result, pagination);
 }
 
 const downloadsSearch = document.getElementById('downloads-search');
@@ -1039,6 +1387,7 @@ function setDownloadsSearchOpen(open) {
     } else {
         downloadsSearchInput.value = '';
         currentDownloadSearch = '';
+        downloadHistoryLimit = DOWNLOAD_HISTORY_PAGE_SIZE;
         applyFilterAndSort();
     }
 }
@@ -1056,6 +1405,7 @@ downloadsSearchInput?.addEventListener('keydown', (event) => {
 
 downloadsSearchInput?.addEventListener('input', (event) => {
     currentDownloadSearch = event.target.value.trim().toLocaleLowerCase();
+    downloadHistoryLimit = DOWNLOAD_HISTORY_PAGE_SIZE;
     applyFilterAndSort();
 });
 
@@ -1079,6 +1429,20 @@ document.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+    const target = event.target;
+    const typing = target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !typing) {
+        event.preventDefault();
+        if (document.getElementById('view-downloads')?.classList.contains('active')) {
+            setDownloadsSearchOpen(true);
+        }
+    }
+    const inUrlEntry = target?.id === 'url-input' || target?.id === 'url-batch-input';
+    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && (!typing || inUrlEntry)
+        && document.getElementById('view-downloads')?.classList.contains('active')) {
+        event.preventDefault();
+        document.getElementById('btn-fetch-info')?.click();
+    }
     if (event.key === 'Escape' && downloadActionsPopover && !downloadActionsPopover.hidden) {
         setDownloadActionsOpen(false);
         downloadActionsToggle?.focus();
@@ -1091,6 +1455,7 @@ document.querySelectorAll('.filter-btn[data-filter]').forEach(btn => {
         document.querySelectorAll('.filter-btn[data-filter]').forEach(button => button.classList.remove('active'));
         event.currentTarget.classList.add('active');
         currentFilter = event.currentTarget.getAttribute('data-filter');
+        downloadHistoryLimit = DOWNLOAD_HISTORY_PAGE_SIZE;
         applyFilterAndSort();
     });
 });
@@ -1167,21 +1532,34 @@ document.getElementById('btn-retry-failed')?.addEventListener('click', () => {
 
 document.getElementById('sort-select')?.addEventListener('change', (e) => {
     currentSort = e.target.value;
+    downloadHistoryLimit = DOWNLOAD_HISTORY_PAGE_SIZE;
     applyFilterAndSort();
 });
 
 
 let wsReconnectDelay = 2000;
 let wsReconnectTimer = null;
+let lastDownloadsMessageAt = 0;
+let wsConnectPending = false;
 
-function connectWebSocket() {
-    if (!windowIsVisible) return;
-    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+async function connectWebSocket() {
+    if (wsConnectPending || (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN))) return;
     if (wsReconnectTimer) {
         clearTimeout(wsReconnectTimer);
         wsReconnectTimer = null;
     }
-    ws = new WebSocket(WS_URL);
+    wsConnectPending = true;
+    let token;
+    try {
+        token = await window.electronAPI?.getLocalWebSocketToken?.();
+    } catch (_) {}
+    wsConnectPending = false;
+    if (!token) {
+        wsReconnectTimer = setTimeout(connectWebSocket, wsReconnectDelay);
+        wsReconnectDelay = Math.min(wsReconnectDelay * 2, 60000);
+        return;
+    }
+    ws = new WebSocket(`${WS_URL}?token=${encodeURIComponent(token)}`);
 
     ws.onopen = function () {
         if (wsReconnectTimer) {
@@ -1196,30 +1574,40 @@ function connectWebSocket() {
     ws.onmessage = function (event) {
         try {
             const payload = JSON.parse(event.data);
-            if (payload.type === 'open_quick_add') {
-                if (window.electronAPI && window.electronAPI.showQuickAdd) {
-                    window.electronAPI.showQuickAdd({
-                        url: payload.url,
-                        cookies: payload.cookies,
-                        user_agent: payload.user_agent,
-                        referer: payload.referer,
-                        filename: payload.filename,
-                        file_size: payload.file_size,
-                        mime_type: payload.mime_type
-                    });
-                }
-            } else if (payload.type === 'state' || payload.type === 'downloads') {
+            if (payload.type === 'state' || payload.type === 'downloads') {
+                lastDownloadsMessageAt = Date.now();
                 // Only update the UI when window is visible — skip heavy DOM work when in tray
                 const downloads = Array.isArray(payload.downloads) ? payload.downloads : [];
                 if (windowIsVisible) {
-                    processDownloadsState(downloads);
+                    const toolsOpen = document.getElementById('view-tools')?.classList.contains('active');
+                    const hasActiveDownloads = downloads.some(isDownloadRunning);
+                    if (toolsOpen && !hasActiveDownloads) {
+                        rawDownloadsData = downloads;
+                        suspendDownloadsUiIfIdle();
+                        for (const id in window.speedHistory) delete window.speedHistory[id];
+                        for (const id in window.progressHistory) delete window.progressHistory[id];
+                    } else {
+                        processDownloadsState(downloads);
+                    }
                 }
+
+                // Always update tray tooltip with active download count (even when hidden in tray)
+                const _activeCount = downloads.filter(d => ['downloading', 'starting', 'resolving', 'preparing'].includes(d.status)).length;
+                window.electronAPI?.updateTrayStatus?.(_activeCount);
 
                 // Track completions for notifications
                 downloads.forEach(dl => {
                     if (!window.knownDownloads) window.knownDownloads = new Map();
 
                     const prevStatus = window.knownDownloads.get(dl.id);
+                    if (dl.source === 'telegram') {
+                        const botActive = ['starting', 'resolving', 'downloading', 'preparing', 'processing'].includes(dl.status);
+                        const createdAt = Number(dl.created_at) || 0;
+                        const isRecent = createdAt > 0 && Math.abs(Date.now() - createdAt) < 30000;
+                        const isNewEvent = prevStatus === undefined && isRecent && (botActive || ['completed', 'error'].includes(dl.status));
+                        const isBotFinish = ['completed', 'error'].includes(dl.status) && prevStatus !== undefined && prevStatus !== dl.status;
+                        updateBotActivity(dl, { notify: isNewEvent || isBotFinish, sync: true });
+                    }
                     if (dl.status === 'error') scheduleAutomaticRetry(dl);
                     if (dl.status === 'completed') {
                         const retryTimer = autoRetryTimers.get(dl.id);
@@ -1252,7 +1640,7 @@ function connectWebSocket() {
                                 playNotificationSound();
                             }
                             // Only run confetti if window is visible (no point animating a hidden window)
-                            if (windowIsVisible && window.confetti) {
+                            if (windowIsVisible && !appSettings.powerSaver && window.confetti) {
                                 const duration = 2000;
                                 const end = Date.now() + duration;
                                 (function frame() {
@@ -1299,6 +1687,9 @@ function connectWebSocket() {
             } else if (payload.type === 'system' && payload.system) {
                 // Skip expensive chart/DOM updates when hidden in tray
                 if (!windowIsVisible) return;
+                const renderNow = Date.now();
+                if (appSettings.powerSaver && renderNow - lastSystemUiUpdateAt < 5000) return;
+                lastSystemUiUpdateAt = renderNow;
                 const cpuVal = Math.round(payload.system.cpu || 0);
                 const ramVal = Math.round(payload.system.memory || 0);
                 const netSpeed = payload.system.net_speed || 0;
@@ -1344,7 +1735,9 @@ function connectWebSocket() {
     };
 
     ws.onclose = function () {
-        if (windowIsVisible) wsReconnectTimer = setTimeout(connectWebSocket, wsReconnectDelay);
+        // Keep the command channel alive while the main window is in the tray.
+        // Browser-extension quick-add requests arrive over this socket.
+        wsReconnectTimer = setTimeout(connectWebSocket, wsReconnectDelay);
         wsReconnectDelay = Math.min(wsReconnectDelay * 2, 60000); // backoff up to 60s
     };
 
@@ -1356,6 +1749,7 @@ function connectWebSocket() {
 
 // Track whether the main window is visible to skip heavy DOM updates when hidden
 let windowIsVisible = true;
+let lastSystemUiUpdateAt = 0;
 if (window.electronAPI && window.electronAPI.onWindowFocusChange) {
     window.electronAPI.onWindowFocusChange((focused) => {
         // focused = false when blurred, but we really care about visibility
@@ -1369,11 +1763,8 @@ document.addEventListener('visibilitychange', () => {
         document.body.classList.add('app-hidden');
         // Release the large wallpaper/compositor layers while the window sits in the tray.
         document.body.style.setProperty('background-image', 'none', 'important');
-        if (wsReconnectTimer) {
-            clearTimeout(wsReconnectTimer);
-            wsReconnectTimer = null;
-        }
-        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) ws.close();
+        // Keep the lightweight WebSocket open so quick-add commands from the
+        // browser extension are received even when the app is minimized to tray.
     } else {
         document.body.classList.remove('app-hidden');
         applySettings();
@@ -1395,6 +1786,9 @@ let selectedQuality = 'best';
 window.isSpotifyMultiTrack = false;
 window.selectedSpotifyTrackIndices = [];
 window.spotifyTracks = [];
+window.isYouTubePlaylist = false;
+window.selectedYouTubeVideoIndices = [];
+window.youtubeVideos = [];
 
 function escapeSpotifyTrackText(value) {
     return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -1402,17 +1796,45 @@ function escapeSpotifyTrackText(value) {
     }[char]));
 }
 
+function formatPlaylistVideoDuration(seconds) {
+    const value = Number(seconds);
+    if (!Number.isFinite(value) || value < 0) return '';
+    const total = Math.floor(value);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const remainder = total % 60;
+    return hours
+        ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
+        : `${minutes}:${String(remainder).padStart(2, '0')}`;
+}
+
+function playlistQualityOptions(selected) {
+    return [
+        ['best', 'Best'], ['1080p', '1080p'], ['720p', '720p'],
+        ['480p', '480p'], ['360p', '360p'], ['audio', 'Audio only']
+    ].map(([value, label]) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+function getYouTubePlaylistRequestVideos() {
+    return window.youtubeVideos.map((video, index) => ({
+        ...video,
+        quality: document.querySelector(`.youtube-video-quality[data-video-index="${index}"]`)?.value || selectedQuality
+    }));
+}
+
 function updateSpotifyTrackSelection() {
     const checkboxes = Array.from(document.querySelectorAll('.spotify-track-checkbox'));
     const selected = checkboxes.filter(input => input.checked).map(input => Number(input.value));
-    window.selectedSpotifyTrackIndices = selected;
+    if (window.isYouTubePlaylist) window.selectedYouTubeVideoIndices = selected;
+    else window.selectedSpotifyTrackIndices = selected;
 
     const visibleRows = Array.from(document.querySelectorAll('.spotify-track-row')).filter(row => !row.hidden);
     const visibleSelected = visibleRows.filter(row => row.querySelector('.spotify-track-checkbox')?.checked).length;
     const selectVisible = document.getElementById('spotify-select-visible');
     if (selectVisible) {
         selectVisible.textContent = visibleRows.length && visibleSelected === visibleRows.length ? 'Clear visible' : 'Select visible';
-        selectVisible.setAttribute('aria-label', visibleRows.length && visibleSelected === visibleRows.length ? 'Clear visible tracks' : 'Select visible tracks');
+        const itemName = window.isYouTubePlaylist ? 'videos' : 'tracks';
+        selectVisible.setAttribute('aria-label', visibleRows.length && visibleSelected === visibleRows.length ? `Clear visible ${itemName}` : `Select visible ${itemName}`);
         selectVisible.disabled = visibleRows.length === 0;
     }
 
@@ -1430,11 +1852,12 @@ function updateSpotifyTrackSelection() {
     });
 
     const downloadButton = document.getElementById('btn-start-download');
-    if (downloadButton && window.isSpotifyMultiTrack) {
+    if (downloadButton && (window.isSpotifyMultiTrack || window.isYouTubePlaylist)) {
+        const itemName = window.isYouTubePlaylist ? 'video' : 'track';
         downloadButton.disabled = selected.length === 0;
         downloadButton.textContent = selected.length
             ? `Download selected (${selected.length})`
-            : 'Select at least one track';
+            : `Select at least one ${itemName}`;
     }
 }
 
@@ -1553,11 +1976,13 @@ document.getElementById('btn-fetch-info')?.addEventListener('click', async () =>
     if (window.lucide) lucide.createIcons();
 
     try {
+        window.resolvedDownloadUrl = null;
         const response = await axios.post(`${API_URL}/info`, { url: url }, { timeout: 30000 });
         const data = response.data;
 
         if (data.status === 'success') {
             const dlInfo = data.download_info || data;
+            window.resolvedDownloadUrl = dlInfo.direct_url || url;
             document.getElementById('modal-title').innerText = dlInfo.title || 'Unknown Title';
             const optionsDiv = document.getElementById('quality-options');
             const sizes = dlInfo.sizes || {};
@@ -1565,7 +1990,10 @@ document.getElementById('btn-fetch-info')?.addEventListener('click', async () =>
             window.isSpotifyMultiTrack = false;
             window.selectedSpotifyTrackIndices = [];
             window.spotifyTracks = Array.isArray(dlInfo.tracks) ? dlInfo.tracks : [];
-            modalContent?.classList.remove('spotify-picker-modal');
+            window.isYouTubePlaylist = false;
+            window.selectedYouTubeVideoIndices = [];
+            window.youtubeVideos = [];
+            modalContent?.classList.remove('spotify-picker-modal', 'youtube-picker-modal');
             const startButton = document.getElementById('btn-start-download');
             if (startButton) startButton.disabled = false;
             const scheduleToggle = document.getElementById('btn-schedule-toggle');
@@ -1584,6 +2012,114 @@ document.getElementById('btn-fetch-info')?.addEventListener('click', async () =>
                         </div>
                     </label>
                 `;
+            } else if (dlInfo.is_youtube_playlist && Array.isArray(dlInfo.videos) && dlInfo.videos.length) {
+                window.isDirectFile = false;
+                window.isSpotify = false;
+                window.isYouTubePlaylist = true;
+                window.youtubeVideos = dlInfo.videos;
+                window.selectedYouTubeVideoIndices = dlInfo.videos.map((_, index) => index);
+                modalContent?.classList.add('spotify-picker-modal', 'youtube-picker-modal');
+                selectedQuality = ['best', '1080p', '720p', '480p', '360p', 'audio'].includes(appSettings.defaultQuality)
+                    ? appSettings.defaultQuality : 'best';
+                const videoRows = dlInfo.videos.map((video, index) => {
+                    const title = escapeSpotifyTrackText(video.title || `Video ${index + 1}`);
+                    const searchableText = escapeSpotifyTrackText(String(video.title || '').toLocaleLowerCase());
+                    const playlistIndex = Number(video.playlist_index) || index + 1;
+                    const duration = formatPlaylistVideoDuration(video.duration);
+                    return `
+                        <div class="spotify-track-row selected" data-search="${searchableText}">
+                            <input id="spotify-track-${index}" class="spotify-track-checkbox" type="checkbox" value="${index}" checked>
+                            <span class="spotify-track-number">${String(playlistIndex).padStart(2, '0')}</span>
+                            <label class="spotify-track-copy" for="spotify-track-${index}">
+                                <strong>${title}</strong>
+                                ${duration ? `<small>${duration}</small>` : ''}
+                            </label>
+                            <select class="youtube-video-quality" data-video-index="${index}" aria-label="Quality for ${title}">
+                                ${playlistQualityOptions(selectedQuality)}
+                            </select>
+                        </div>
+                    `;
+                }).join('');
+
+                optionsDiv.innerHTML = `
+                    <div class="spotify-picker-summary">
+                        <span class="spotify-picker-icon"><i data-lucide="list-video"></i></span>
+                        <span class="spotify-picker-copy">
+                            <strong>Choose videos</strong>
+                            <small>YouTube playlist · ${dlInfo.video_count || dlInfo.videos.length} videos</small>
+                        </span>
+                        <label class="spotify-select-all" for="spotify-select-all">
+                            <input id="spotify-select-all" type="checkbox" checked>
+                            <span>Select all</span>
+                        </label>
+                    </div>
+                    <div class="spotify-selection-count" id="spotify-selection-count"></div>
+                    <div class="spotify-track-tools">
+                        <label class="spotify-track-search">
+                            <i data-lucide="search" aria-hidden="true"></i>
+                            <input id="spotify-track-search" type="search" placeholder="Search videos" autocomplete="off" aria-label="Search videos">
+                        </label>
+                        <button id="spotify-select-visible" class="spotify-tool-button" type="button">Select visible</button>
+                    </div>
+                    <div class="spotify-track-list" role="group" aria-label="Choose YouTube videos">
+                        ${videoRows}
+                    </div>
+                    <div class="spotify-empty-filter" id="spotify-empty-filter" hidden>No videos match your search.</div>
+                    <label class="youtube-playlist-quality">
+                        <span>Apply quality to all videos</span>
+                        <select id="youtube-playlist-quality" aria-label="Video quality">
+                            ${playlistQualityOptions(selectedQuality)}
+                        </select>
+                    </label>
+                `;
+
+                const selectAll = document.getElementById('spotify-select-all');
+                selectAll?.addEventListener('change', () => {
+                    document.querySelectorAll('.spotify-track-checkbox').forEach(input => {
+                        input.checked = selectAll.checked;
+                    });
+                    updateSpotifyTrackSelection();
+                });
+                document.querySelectorAll('.spotify-track-checkbox').forEach(input => {
+                    input.addEventListener('change', updateSpotifyTrackSelection);
+                });
+                document.getElementById('spotify-track-search')?.addEventListener('input', (event) => {
+                    const query = event.target.value.trim().toLocaleLowerCase();
+                    let visibleCount = 0;
+                    document.querySelectorAll('.spotify-track-row').forEach(row => {
+                        row.hidden = !row.dataset.search.includes(query);
+                        if (!row.hidden) visibleCount++;
+                    });
+                    const emptyState = document.getElementById('spotify-empty-filter');
+                    if (emptyState) emptyState.hidden = visibleCount > 0;
+                    updateSpotifyTrackSelection();
+                });
+                document.getElementById('spotify-select-visible')?.addEventListener('click', () => {
+                    const visibleRows = Array.from(document.querySelectorAll('.spotify-track-row')).filter(row => !row.hidden);
+                    const shouldSelect = visibleRows.some(row => !row.querySelector('.spotify-track-checkbox')?.checked);
+                    visibleRows.forEach(row => {
+                        const checkbox = row.querySelector('.spotify-track-checkbox');
+                        if (checkbox) checkbox.checked = shouldSelect;
+                    });
+                    updateSpotifyTrackSelection();
+                });
+                document.getElementById('youtube-playlist-quality')?.addEventListener('change', event => {
+                    selectedQuality = event.target.value;
+                    document.querySelectorAll('.youtube-video-quality').forEach(select => {
+                        select.value = selectedQuality;
+                    });
+                });
+                document.querySelectorAll('.youtube-video-quality').forEach(select => {
+                    select.addEventListener('click', event => event.stopPropagation());
+                    select.addEventListener('change', event => event.stopPropagation());
+                });
+                if (scheduleToggle) {
+                    scheduleToggle.style.display = 'inline-flex';
+                    scheduleToggle.title = 'Schedule selected videos';
+                }
+                document.getElementById('schedule-picker-container').style.display = 'none';
+                document.getElementById('schedule-time').value = '';
+                updateSpotifyTrackSelection();
             } else if (dlInfo.is_spotify) {
                 window.isDirectFile = false;
                 window.isSpotify = true;
@@ -1810,7 +2346,9 @@ document.getElementById('btn-schedule-toggle')?.addEventListener('click', () => 
 document.getElementById('btn-start-download')?.addEventListener('click', async () => {
     if (window.spotifyDownloadPending) return;
     const url = document.getElementById('url-input').value;
+    const downloadUrl = window.resolvedDownloadUrl || url;
     const isSpotifyRequest = window.isSpotify;
+    const isYouTubePlaylistRequest = window.isYouTubePlaylist;
     const qualityModal = document.getElementById('quality-modal');
     if (!isSpotifyRequest) qualityModal.style.display = 'none';
 
@@ -1845,26 +2383,34 @@ document.getElementById('btn-start-download')?.addEventListener('click', async (
                 return;
             }
             await axios.post(`${API_URL}/schedule`, {
-                url: url,
+                url: downloadUrl,
                 save_path: effectivePath,
                 is_yt_dlp: window.isDirectFile ? false : true,
                 quality: window.isSpotify ? 'audio' : selectedQuality,
                 run_at: d.toISOString(),
                 title: document.getElementById('modal-title').innerText,
-                ...(window.isSpotifyMultiTrack ? { selected_track_indices: [...window.selectedSpotifyTrackIndices] } : {})
+                ...(window.isSpotifyMultiTrack ? { selected_track_indices: [...window.selectedSpotifyTrackIndices] } : {}),
+                ...(isYouTubePlaylistRequest ? {
+                    youtube_videos: getYouTubePlaylistRequestVideos(),
+                    selected_video_indices: [...window.selectedYouTubeVideoIndices]
+                } : {})
             });
             showToast(`Download scheduled for ${d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`, "#3b82f6");
             if (isSpotifyRequest) qualityModal.style.display = 'none';
         } else {
             // Start immediately
             const response = await axios.post(`${API_URL}/download`, {
-                url: url,
+                url: downloadUrl,
                 save_path: effectivePath,
                 is_yt_dlp: window.isDirectFile ? false : true,
                 quality: window.isSpotify ? 'audio' : selectedQuality,
                 title: document.getElementById('modal-title').innerText,
                 ...(window.isSpotifyMultiTrack ? { selected_track_indices: [...window.selectedSpotifyTrackIndices] } : {}),
-                ...(window.isSpotify && window.spotifyTracks?.length ? { spotify_tracks: window.spotifyTracks } : {})
+                ...(window.isSpotify && window.spotifyTracks?.length ? { spotify_tracks: window.spotifyTracks } : {}),
+                ...(isYouTubePlaylistRequest ? {
+                    youtube_videos: getYouTubePlaylistRequestVideos(),
+                    selected_video_indices: [...window.selectedYouTubeVideoIndices]
+                } : {})
             });
             if (response?.data?.status === 'error') {
                 throw new Error(response.data.message || 'Could not start the selected downloads');
@@ -1874,6 +2420,8 @@ document.getElementById('btn-start-download')?.addEventListener('click', async (
             if (window.isSpotify) {
                 const skippedMessage = skippedTrackCount ? `; skipped ${skippedTrackCount} unmatched/duplicate track(s)` : '';
                 showToast(`Starting ${trackCount || 0} Spotify download${trackCount === 1 ? '' : 's'}${skippedMessage}...`, "#1db954");
+            } else if (isYouTubePlaylistRequest) {
+                showToast(`Starting ${trackCount || 0} YouTube video download${trackCount === 1 ? '' : 's'}...`, "#6366f1");
             } else {
                 showToast("Starting Download...", "#10b981");
             }
@@ -1886,6 +2434,7 @@ document.getElementById('btn-start-download')?.addEventListener('click', async (
         }
 
         document.getElementById('url-input').value = '';
+        window.resolvedDownloadUrl = null;
 
         // Reset one-time override after use
         customSavePath = null;
@@ -1905,20 +2454,66 @@ document.getElementById('btn-start-download')?.addEventListener('click', async (
 });
 
 
-function showToast(text, color, duration = 3000) {
-    Toastify({
-        text: text,
-        duration,
-        gravity: "bottom",
-        position: "right",
-        style: {
-            background: color,
-            borderRadius: "12px",
-            fontFamily: "Outfit",
-            boxShadow: `0 4px 15px ${color}66`
+let activeToast = null;
+let activeToastText = '';
+let activeToastTimer = null;
+let lastToastText = '';
+let lastToastAt = 0;
+
+function showToast(text, color = '#6366f1', duration = 3000) {
+    const message = String(text ?? '').trim();
+    if (!message || !window.Toastify) return;
+
+    const now = Date.now();
+    if (message === activeToastText && activeToast) return;
+    // Ignore a just-dismissed duplicate too, so repeated events do not flash.
+    if (message === lastToastText && now - lastToastAt < 1400) return;
+
+    if (activeToastTimer) clearTimeout(activeToastTimer);
+    if (activeToast?.hideToast) activeToast.hideToast();
+    document.querySelectorAll('.toastify.ledo-glass-toast').forEach(toast => toast.remove());
+
+    activeToastText = message;
+    lastToastText = message;
+    lastToastAt = now;
+    activeToast = Toastify({
+        text: message,
+        duration: Math.max(1200, Number(duration) || 3000),
+        gravity: 'top',
+        position: 'center',
+        className: 'ledo-glass-toast',
+        style: { '--toast-accent': color },
+        close: true,
+        stopOnFocus: true,
+        onClick: () => activeToast?.hideToast?.()
+    });
+    activeToast.showToast();
+    activeToast.toastElement?.style.setProperty('--toast-accent', color);
+
+    const shownToast = activeToast;
+    activeToastTimer = setTimeout(() => {
+        if (activeToast === shownToast) {
+            activeToast = null;
+            activeToastText = '';
+            activeToastTimer = null;
         }
-    }).showToast();
+    }, Math.max(1200, Number(duration) || 3000) + 450);
 }
+window.showToast = showToast;
+
+window.copyDownloadSha256 = async function(downloadId) {
+    showToast('جاري حساب بصمة SHA-256 للملف…', '#6366f1', 30000);
+    try {
+        const response = await axios.get(`${API_URL}/downloads/${encodeURIComponent(downloadId)}/sha256`, { timeout: 600000 });
+        const digest = response.data?.sha256;
+        if (!digest) throw new Error('لم يرجع المحرك بصمة الملف.');
+        if (!window.electronAPI?.writeClipboardText) throw new Error('تعذر الوصول إلى الحافظة.');
+        await window.electronAPI.writeClipboardText(digest);
+        showToast(`تم نسخ بصمة SHA-256 للملف ${response.data.filename || ''}`, '#10b981', 5000);
+    } catch (error) {
+        showToast(error?.response?.data?.detail || error.message || 'تعذر حساب بصمة الملف.', '#ef4444', 5000);
+    }
+};
 
 function formatBytes(bytes, decimals = 2) {
     if (!+bytes) return '0 Bytes';
@@ -1973,7 +2568,7 @@ function getDownloadEtaSeconds(download) {
     return null;
 }
 
-function renderDownloads(downloads) {
+function renderDownloads(downloads, pagination = null) {
     const listEl = document.getElementById('downloads-list');
     if (!listEl || !Array.isArray(downloads)) return;
     const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -1983,7 +2578,7 @@ function renderDownloads(downloads) {
     // Remove cards that are no longer in the payload
     const currentIds = downloads.map(dl => `dl-card-${dl.id}`);
     Array.from(listEl.children).forEach(child => {
-        if (!currentIds.includes(child.id) && child.id !== 'downloads-filter-empty') {
+        if (!currentIds.includes(child.id) && child.id !== 'downloads-filter-empty' && child.id !== 'downloads-load-more') {
             child.remove();
         }
     });
@@ -1991,11 +2586,27 @@ function renderDownloads(downloads) {
     downloads.forEach((dl, index) => {
         let card = document.getElementById(`dl-card-${dl.id}`);
 
-        const speed = dl.speed ? formatBytes(dl.speed) + '/s' : '--';
+        const savedActiveSeconds = Number(dl.active_elapsed_seconds) || 0;
+        const hasActiveElapsed = savedActiveSeconds > 0 || Boolean(dl.active_started_at);
+        const elapsedDownloadSeconds = Math.max(0, hasActiveElapsed
+            ? savedActiveSeconds
+                + (dl.active_started_at && dl.status === 'downloading'
+                    ? Math.max(0, Date.now() - Number(dl.active_started_at)) / 1000 : 0)
+            : dl.completed_at && dl.created_at
+                ? (Number(dl.completed_at) - Number(dl.created_at)) / 1000
+                : 0);
+        const averageSpeed = elapsedDownloadSeconds > 0 && Number(dl.downloaded) > 0
+            ? formatBytes(Number(dl.downloaded) / elapsedDownloadSeconds) + '/s'
+            : '--';
+        const speed = dl.status === 'completed'
+            ? averageSpeed
+            : dl.speed ? formatBytes(dl.speed) + '/s' : '--';
         const size = dl.total_size ? formatBytes(dl.total_size) : 'Unknown';
         const etaSeconds = getDownloadEtaSeconds(dl);
-        const elapsedSeconds = dl.completed_at && dl.created_at
-            ? Math.max(0, Math.ceil((Number(dl.completed_at) - Number(dl.created_at)) / 1000))
+        const elapsedSeconds = dl.completed_at
+            ? (Number(dl.active_elapsed_seconds) > 0
+                ? Math.max(0, Math.ceil(Number(dl.active_elapsed_seconds)))
+                : dl.created_at ? Math.max(0, Math.ceil((Number(dl.completed_at) - Number(dl.created_at)) / 1000)) : null)
             : null;
         const eta = dl.status === 'completed'
             ? (elapsedSeconds === null ? 'Finished' : `Finished in ${formatDuration(elapsedSeconds)}`)
@@ -2037,6 +2648,7 @@ function renderDownloads(downloads) {
             errorHtml = `
                 <div style="color: #ef4444; font-size: 13px; margin-top: 10px; background: rgba(239, 68, 68, 0.1); padding: 8px 12px; border-radius: 6px;">
                     ${escapeHtml(dl.error_message)}
+                    ${dl.error_hint ? `<div style="margin-top: 5px; color: var(--text-muted); font-size: 12px;">${escapeHtml(dl.error_hint)}</div>` : ''}
                     ${updateLinkBtn}
                 </div>
             `;
@@ -2087,7 +2699,15 @@ function renderDownloads(downloads) {
             : dl.status === 'preparing' ? 'Preparing source…'
                 : dl.status === 'starting' ? 'Waiting for a download slot…'
                     : `${formatBytes(dl.downloaded)} / ${size}`;
-        const speedLabel = isWaitingForTransfer ? '—' : speed;
+        const speedHtml = dl.status === 'completed'
+            ? `<span class="dl-average-speed" title="متوسط سرعة التنزيل خلال وقت التنزيل الفعلي، دون احتساب فترات الإيقاف والتجهيز">Avg ${averageSpeed}</span>`
+            : dl.status === 'downloading' && Number(dl.speed) > 0
+                ? `<span class="dl-speed-pill">▼ ${speed}</span>`
+                : (dl.status === 'processing' || isWaitingForTransfer ? '—' : speed);
+        const averageSpeedHtml = '';
+        const etaHtml = dl.status === 'downloading' && etaSeconds !== null
+            ? `<span class="dl-eta-pill">⏱ ${formatDuration(etaSeconds)}</span>`
+            : (isWaitingForTransfer ? '—' : eta);
         const percentLabel = dl.status === 'resolving'
             ? `حوالي ${Math.round(Number(dl.progress) || 0)}% من البحث`
             : isWaitingForTransfer ? '—' : `${dl.progress.toFixed(1)}%`;
@@ -2096,7 +2716,7 @@ function renderDownloads(downloads) {
                 <div title="Drag to reorder" style="color: var(--text-muted); display: flex; align-items: center; margin-right: 8px;">
                     <i data-lucide="grip-vertical" style="width: 16px; height: 16px;"></i>
                 </div>
-                <div class="dl-title" title="${safeName}">${safeName}</div>
+                <div class="dl-title" title="${safeName}"><span class="dl-title-text">${safeName}</span>${dl.source === 'telegram' ? '<span class="dl-source-badge">from bot</span>' : ''}</div>
                 <div class="dl-actions">
                     ${playBtnHtml}
             <div class="dl-status ${dl.status}" title="${statusTitle}">${statusLabel}</div>
@@ -2109,9 +2729,10 @@ function renderDownloads(downloads) {
             </div>
             <div class="dl-footer">
                 <span>${byteLabel}</span>
-                <span>${speedLabel}</span>
+                <span>${speedHtml}</span>
+                ${averageSpeedHtml}
                 <span>${percentLabel}</span>
-                <span title="${dl.status === 'completed' ? 'Total time from adding to completion' : 'Estimated time remaining'}">${isWaitingForTransfer ? '—' : eta}</span>
+                <span title="${dl.status === 'completed' ? 'Active download time, excluding pauses and processing' : 'Estimated time remaining'}">${etaHtml}</span>
             </div>
         `;
 
@@ -2130,7 +2751,12 @@ function renderDownloads(downloads) {
             if (window.tippy) {
                 tippy(card.querySelectorAll('[title]'), {
                     content(reference) { const title = reference.getAttribute('title'); reference.removeAttribute('title'); return title; },
-                    animation: 'scale', theme: 'translucent', arrow: true
+                    animation: 'scale', theme: 'translucent', arrow: true,
+                    onShow(instance) {
+                        if (instance.reference.classList.contains('dl-average-speed')) {
+                            instance.popper.querySelector('.tippy-box')?.setAttribute('dir', 'rtl');
+                        }
+                    }
                 });
             }
         } else {
@@ -2169,11 +2795,21 @@ function renderDownloads(downloads) {
             if (statusEl && statusEl.title !== statusTitle) statusEl.title = statusTitle;
 
             const footer = card.querySelector('.dl-footer');
-            if (footer && footer.children.length >= 4) {
-                footer.children[0].textContent = byteLabel;
-                footer.children[1].textContent = speedLabel;
-                footer.children[2].textContent = percentLabel;
-                footer.children[3].textContent = isWaitingForTransfer ? '—' : eta;
+            if (footer) {
+                footer.innerHTML = `<span>${byteLabel}</span><span>${speedHtml}</span>${averageSpeedHtml}<span>${percentLabel}</span><span title="${dl.status === 'completed' ? 'Active download time, excluding pauses and processing' : 'Estimated time remaining'}">${etaHtml}</span>`;
+                // The footer is rebuilt during in-place updates, so attach the app-styled
+                // tooltip to titles introduced after the card was first rendered.
+                if (window.tippy) {
+                    tippy(footer.querySelectorAll('[title]'), {
+                        content(reference) { const title = reference.getAttribute('title'); reference.removeAttribute('title'); return title; },
+                        animation: 'scale', theme: 'translucent', arrow: true,
+                        onShow(instance) {
+                            if (instance.reference.classList.contains('dl-average-speed')) {
+                                instance.popper.querySelector('.tippy-box')?.setAttribute('dir', 'rtl');
+                            }
+                        }
+                    });
+                }
             }
         }
 
@@ -2203,10 +2839,32 @@ function renderDownloads(downloads) {
             <div class="empty-state-icon"><i data-lucide="${hasDownloads ? 'search-x' : 'download-cloud'}"></i></div>
             <h2>${hasDownloads ? 'No matching downloads' : 'No downloads yet'}</h2>
             <p>${hasDownloads ? 'Try another search or choose a different filter.' : 'Paste a link above to start your next download.'}</p>
+            ${hasDownloads ? '' : '<span><i data-lucide="sparkles"></i> Video, audio, and direct files · Ctrl+Space for Quick Add</span>'}
         `;
         if (window.lucide) lucide.createIcons({ root: emptyState });
     } else if (emptyState) {
         emptyState.remove();
+    }
+
+    let loadMore = document.getElementById('downloads-load-more');
+    if (pagination?.hasMore) {
+        if (!loadMore) {
+            loadMore = document.createElement('button');
+            loadMore.id = 'downloads-load-more';
+            loadMore.type = 'button';
+            loadMore.className = 'downloads-load-more';
+            listEl.appendChild(loadMore);
+        }
+        const remaining = pagination.total - pagination.visible;
+        const nextCount = Math.min(DOWNLOAD_HISTORY_PAGE_SIZE, remaining);
+        loadMore.style.order = String(downloads.length);
+        loadMore.textContent = `تحميل ${nextCount} تنزيل أقدم · ${remaining} متبقية`;
+        loadMore.onclick = () => {
+            downloadHistoryLimit += DOWNLOAD_HISTORY_PAGE_SIZE;
+            applyFilterAndSort();
+        };
+    } else if (loadMore) {
+        loadMore.remove();
     }
 
     // Keep an already-open detail panel in sync with the live download list.
@@ -2215,6 +2873,7 @@ function renderDownloads(downloads) {
 
 // Proactive refresh on window focus / startup
 let refreshInProgress = false;
+let lastDownloadsFallbackAt = 0;
 async function refreshDownloads() {
     if (refreshInProgress) return;
     refreshInProgress = true;
@@ -2230,11 +2889,28 @@ async function refreshDownloads() {
     }
 }
 
-// Recover live progress if a backgrounded WebSocket stops delivering messages
-// without closing. Keep the fallback quiet while the app is in the tray.
+// The WebSocket is the normal update path. Poll only as a recovery path when
+// it stops delivering download state, with a much longer idle retry interval.
 setInterval(() => {
-    if (windowIsVisible) refreshDownloads();
-}, 2000);
+    if (!windowIsVisible) return;
+    const now = Date.now();
+    const hasActiveDownloads = rawDownloadsData.some(download =>
+        ['downloading', 'starting', 'resolving', 'preparing', 'processing'].includes(download.status)
+    );
+    const socketOpen = ws?.readyState === WebSocket.OPEN;
+
+    // Reconnects already request a fresh snapshot, so an idle disconnected
+    // app does not need to keep querying and sorting the full history.
+    if (!hasActiveDownloads && !socketOpen) return;
+
+    const staleAfter = hasActiveDownloads ? 12000 : 60000;
+    const minimumRefreshGap = appSettings.powerSaver ? 10000 : (hasActiveDownloads ? 5000 : 60000);
+    if (socketOpen && now - lastDownloadsMessageAt < staleAfter) return;
+    if (now - lastDownloadsFallbackAt < minimumRefreshGap) return;
+
+    lastDownloadsFallbackAt = now;
+    refreshDownloads();
+}, 5000);
 
 // Drawer Logic
 let drawerChartInstance = null;
@@ -2498,6 +3174,8 @@ contextMenu.addEventListener('click', (e) => {
         window.electronAPI.writeClipboardText(path);
     } else if (action === 'copy-url' && window.electronAPI && window.electronAPI.writeClipboardText) {
         window.electronAPI.writeClipboardText(url);
+    } else if (action === 'copy-sha256') {
+        if (typeof window.copyDownloadSha256 === 'function') window.copyDownloadSha256(id);
     } else if (action === 'cancel-download') {
         if (typeof cancelDownload === 'function') cancelDownload(id, deleteFile);
     } else if (action === 'pause-download') {
@@ -2534,6 +3212,7 @@ window.showDownloadContextMenu = function(e, id, status) {
             menuHtml += `<div class="ctx-item" data-action="copy-path" data-path="${encPath}"><i data-lucide="copy"></i> Copy File Path</div>`;
         }
         if (dl.url) menuHtml += `<div class="ctx-item" data-action="copy-url" data-url="${encUrl}"><i data-lucide="link"></i> Copy Source URL</div>`;
+        menuHtml += `<div class="ctx-item" data-action="copy-sha256" data-id="${encId}"><i data-lucide="fingerprint"></i> Calculate & Copy SHA-256</div>`;
         menuHtml += `<div class="ctx-separator"></div>`;
         menuHtml += `<div class="ctx-item ctx-danger" data-action="cancel-download" data-id="${encId}" data-delete="false"><i data-lucide="trash"></i> Remove from list</div>`;
         if (dl.save_path) menuHtml += `<div class="ctx-item ctx-danger" data-action="cancel-download" data-id="${encId}" data-delete="true"><i data-lucide="trash-2"></i> Delete File & Remove</div>`;
@@ -3196,7 +3875,64 @@ document.getElementById('btn-close')?.addEventListener('click', () => {
     window.electronAPI.windowControl('close');
 });
 
+const navigationSidebar = document.querySelector('.sidebar');
+const navigationSidebarToggle = document.getElementById('btn-toggle-nav-sidebar');
+function setNavigationSidebarCollapsed(collapsed, persist = false) {
+    if (!navigationSidebar) return;
+    navigationSidebar.classList.toggle('is-collapsed', collapsed);
+    if (navigationSidebarToggle) {
+        const label = collapsed ? 'Expand navigation' : 'Collapse navigation';
+        if (navigationSidebarToggle._tippy) navigationSidebarToggle._tippy.setContent(label);
+        else navigationSidebarToggle.title = label;
+        navigationSidebarToggle.setAttribute('aria-label', label);
+        navigationSidebarToggle.setAttribute('aria-expanded', String(!collapsed));
+        navigationSidebarToggle.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16${collapsed ? '' : 'M15 9l-3 3 3 3'}${collapsed ? 'M12 9l3 3-3 3' : ''}"></path></svg>`;
+    }
+    if (persist) localStorage.setItem('ledo_nav_collapsed', String(collapsed));
+}
+
+setNavigationSidebarCollapsed(localStorage.getItem('ledo_nav_collapsed') === 'true');
+navigationSidebarToggle?.addEventListener('click', () => {
+    setNavigationSidebarCollapsed(!navigationSidebar?.classList.contains('is-collapsed'), true);
+});
+
 // Navigation logic (Sidebar)
+const isDownloadRunning = download => ['downloading', 'starting', 'resolving', 'preparing', 'processing'].includes(download?.status);
+function suspendDownloadsUiIfIdle() {
+    if (rawDownloadsData.some(isDownloadRunning)) return;
+    const list = document.getElementById('downloads-list');
+    if (!list) return;
+    list.replaceChildren();
+    list.dataset.suspendedForTools = 'true';
+}
+
+let mediaToolsLoadPromise = null;
+function enterMediaTools() {
+    const host = document.getElementById('view-tools');
+    if (!host) return;
+    if (window.LedoMediaTools) {
+        window.LedoMediaTools.mount(host);
+        return;
+    }
+    host.innerHTML = '<div class="media-lazy-state" dir="rtl"><span class="media-lazy-spinner"></span><span>جارٍ تجهيز الأدوات…</span></div>';
+    if (!mediaToolsLoadPromise) {
+        mediaToolsLoadPromise = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = 'media-tools.js';
+            script.onload = resolve;
+            script.onerror = () => reject(new Error('تعذّر تحميل قسم الأدوات.'));
+            document.body.appendChild(script);
+        }).catch(error => {
+            mediaToolsLoadPromise = null;
+            host.innerHTML = `<div class="media-lazy-error" dir="rtl">${error.message} <button type="button" onclick="window.dispatchEvent(new Event('ledo-open-tools'))">إعادة المحاولة</button></div>`;
+        });
+    }
+    mediaToolsLoadPromise.then(() => {
+        if (document.getElementById('view-tools')?.classList.contains('active')) window.LedoMediaTools?.mount(host);
+    });
+}
+window.addEventListener('ledo-open-tools', enterMediaTools);
+
 document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', (e) => {
         e.preventDefault();
@@ -3207,13 +3943,15 @@ document.querySelectorAll('.nav-item').forEach(item => {
         const text = e.currentTarget.innerText || '';
         const isSettings = id === 'nav-settings' || text.includes('Settings');
         const isStats = id === 'nav-stats' || text.includes('Statistics');
-        const isAccount = id === 'nav-account' || text.includes('Account');
-
+        const isMedia = id === 'nav-tools' || text.includes('الأدوات') || text.includes('Media Tools');
+        const isLibraryHub = id === 'nav-library-hub';
+        if (!isMedia) window.LedoMediaTools?.leave();
         const views = [
             document.getElementById('view-downloads'), 
             document.getElementById('view-settings'), 
-            document.getElementById('view-stats'), 
-            document.getElementById('view-account')
+            document.getElementById('view-stats'),
+            document.getElementById('view-tools'),
+            document.getElementById('view-library-hub')
         ];
         views.forEach(v => { if (v) v.classList.remove('active'); });
 
@@ -3223,11 +3961,10 @@ document.querySelectorAll('.nav-item').forEach(item => {
         } else if (isStats) {
             targetView = document.getElementById('view-stats');
             loadStats();
-        } else if (isAccount) {
-            targetView = document.getElementById('view-account');
-            if (window.firebaseApp && typeof initFirebaseAuth === 'function') {
-                initFirebaseAuth();
-            }
+        } else if (isMedia) {
+            targetView = document.getElementById('view-tools');
+        } else if (isLibraryHub) {
+            targetView = document.getElementById('view-library-hub');
         } else {
             targetView = document.getElementById('view-downloads');
         }
@@ -3240,6 +3977,15 @@ document.querySelectorAll('.nav-item').forEach(item => {
             if (window.lucide) {
                 lucide.createIcons({ root: targetView });
             }
+        }
+        if (isMedia) {
+            suspendDownloadsUiIfIdle();
+            enterMediaTools();
+        } else if (isLibraryHub) {
+            window.LedoLibraryHub?.mount(targetView, rawDownloadsData);
+        } else if (id === 'nav-downloads') {
+            if (rawDownloadsData.length) processDownloadsState(rawDownloadsData);
+            refreshDownloads();
         }
     });
 });
@@ -3254,372 +4000,6 @@ if (btnSeeAllHistory) {
         const filterCompleted = document.querySelector('.filter-btn[data-filter="completed"]') || document.querySelector('.filter-btn[data-filter="all"]');
         if (filterCompleted) filterCompleted.click();
     });
-}
-
-// ============================================
-// ACCOUNT & AUTH LOGIC
-// ============================================
-
-let isFirebaseAuthInitialized = false;
-
-function initFirebaseAuth() {
-    const { firebaseApp } = window;
-    if (!firebaseApp || isFirebaseAuthInitialized) return;
-    isFirebaseAuthInitialized = true;
-    
-    const authSection = document.getElementById('auth-section');
-    const profileSection = document.getElementById('profile-section');
-    const authError = document.getElementById('auth-error');
-    const profileUsername = document.getElementById('profile-username');
-    const profileAvatar = document.getElementById('profile-avatar');
-    
-    let unsubscribeInbox = null;
-
-    // Auth State Changed
-    firebaseApp.onAuthStateChanged((user) => {
-        if (user) {
-            if (authSection) authSection.style.display = 'none';
-            if (profileSection) profileSection.style.display = 'block';
-            
-            if (profileUsername) profileUsername.innerText = user.isAnonymous ? 'Guest User' : (user.displayName || 'User');
-            if (profileAvatar) profileAvatar.src = user.photoURL || 'icon.png';
-            // --- Admin Panel Detection ---
-            const adminPanel = document.getElementById("admin-control-panel");
-            const isAdminEmail = (user.email === "waleed@ledodown.local");
-            if (isAdminEmail) {
-                if (adminPanel) adminPanel.style.display = "block";
-                const ps = document.getElementById("profile-status");
-                if (ps) { ps.innerText = "Administrator"; ps.parentElement.style.color = "#ef4444"; }
-            } else {
-                if (adminPanel) adminPanel.style.display = "none";
-                user.getIdTokenResult().then(function(idTokenResult) {
-                    if (idTokenResult.claims.admin) {
-                        if (adminPanel) adminPanel.style.display = "block";
-                        var ps2 = document.getElementById("profile-status");
-                        if (ps2) { ps2.innerText = "Administrator"; ps2.parentElement.style.color = "#ef4444"; }
-                        if (window.lucide) lucide.createIcons();
-                    }
-                });
-            }
-            // --- End Admin Panel Detection ---
-            
-            const profileStatus = document.getElementById('profile-status');
-            if (profileStatus) {
-                profileStatus.innerText = user.isAnonymous ? 'Guest Member' : 'Premium Member';
-            }
-
-            // Enforce Anonymous Rules
-            const supportPanel = document.querySelector('.support-panel');
-            const inboxPanel = document.querySelector('.inbox-panel');
-            const avatarUploadBtn = document.querySelector('.avatar-upload-btn');
-            if (user.isAnonymous) {
-                if (supportPanel) {
-                    supportPanel.style.pointerEvents = 'none';
-                    supportPanel.style.opacity = '0.5';
-                    const title = supportPanel.querySelector('.panel-title');
-                    if (title) title.innerHTML = '<i data-lucide="lock"></i> Support (Register to use)';
-                }
-                if (inboxPanel) inboxPanel.style.display = 'none';
-                if (avatarUploadBtn) avatarUploadBtn.style.display = 'none';
-            } else {
-                if (supportPanel) {
-                    supportPanel.style.pointerEvents = 'auto';
-                    supportPanel.style.opacity = '1';
-                    const title = supportPanel.querySelector('.panel-title');
-                    if (title) title.innerHTML = '<i data-lucide="message-circle"></i> الدعم الفني (محادثة مباشرة)';
-                }
-                if (inboxPanel) inboxPanel.style.display = 'flex';
-                if (avatarUploadBtn) avatarUploadBtn.style.display = 'block';
-            }
-
-            // Listen to User Status (Bans/Deletions)
-            if (window.unsubscribeUserStatus) window.unsubscribeUserStatus();
-            window.unsubscribeUserStatus = firebaseApp.listenToUserStatus((userData, error) => {
-                if (error) {
-                    // E.g. permission-denied due to ban or network issues
-                    if (error.code === 'permission-denied') {
-                        showToast('Your session was terminated. You may have been banned.', '#ef4444');
-                        firebaseApp.auth.signOut();
-                    } else if (error.code !== 'unavailable') { // ignore offline temporarily
-                        showToast('Session error: ' + error.message, '#f59e0b');
-                    }
-                    return;
-                }
-                
-                if (!userData) {
-                    // Document deleted
-                    showToast('Account has been deleted by administrator.', '#ef4444');
-                    firebaseApp.auth.signOut();
-                } else if (userData.status === 'disabled' || userData.status === 'banned' || userData.banned) {
-                    // User banned
-                    showToast(`Your account has been suspended by the administrator. Reason: ${userData.banReason || 'Unknown'}`, '#ef4444');
-                    firebaseApp.auth.signOut();
-                }
-            });
-
-            // Listen to Inbox
-            if (unsubscribeInbox) unsubscribeInbox();
-            unsubscribeInbox = firebaseApp.listenToInbox((messages, addedMessages, isInitial) => {
-                if (!isInitial && addedMessages && addedMessages.length > 0) {
-                    addedMessages.forEach(msg => {
-                        const title = msg.title || 'رسالة من الإدارة';
-                        const body = msg.body || msg.text || msg.message || '';
-                        
-                        // Native OS Notification
-                        if (window.electronAPI && window.electronAPI.showNotification) {
-                            window.electronAPI.showNotification(title, body);
-                        } else if (window.Notification && Notification.permission === 'granted') {
-                            new Notification(title, { body: body });
-                        }
-
-                        // In-app Toast Notification
-                        if (typeof showToast === 'function') {
-                            showToast(title, '#6366f1');
-                        } else if (window.Toastify) {
-                            window.Toastify({
-                                text: title,
-                                duration: 5000,
-                                gravity: 'top',
-                                position: 'center',
-                                style: {
-                                    background: 'linear-gradient(135deg, #6366f1, #4f46e5)',
-                                    borderRadius: '10px'
-                                }
-                            }).showToast();
-                        }
-                    });
-                }
-                const inboxContainer = document.getElementById('inbox-messages');
-                const emptyMsg = document.getElementById('inbox-empty');
-                if (!inboxContainer) return;
-                
-                if (!messages || messages.length === 0) {
-                    if (emptyMsg) emptyMsg.style.display = 'block';
-                    Array.from(inboxContainer.children).forEach(c => { if(c.id !== 'inbox-empty') c.remove() });
-                } else {
-                    if (emptyMsg) emptyMsg.style.display = 'none';
-                    inboxContainer.innerHTML = '';
-                    messages.forEach(msg => {
-                        let dateObj = msg.createdAt;
-                        if (dateObj && typeof dateObj.toDate === 'function') dateObj = dateObj.toDate();
-                        else if (dateObj && dateObj.seconds) dateObj = new Date(dateObj.seconds * 1000);
-                        else dateObj = new Date(dateObj);
-                        
-                        let dateStr = isNaN(dateObj.getTime()) ? '' : dateObj.toLocaleString();
-
-                        const div = document.createElement('div');
-                        div.style = "background: rgba(99, 102, 241, 0.1); border-right: 3px solid #6366f1; padding: 10px; border-radius: 6px; font-size: 13px;";
-                        div.innerHTML = `
-                            <div style="color: #6366f1; font-weight: bold; margin-bottom: 4px;">${msg.title || 'الادارة:'}</div>
-                            <div style="color: var(--text-main);">${msg.body || msg.text || msg.message || ''}</div>
-                            <div style="color: var(--text-muted); font-size: 10px; margin-top: 4px; text-align: left;">${dateStr}</div>
-                        `;
-                        inboxContainer.appendChild(div);
-                    });
-                    if (emptyMsg) inboxContainer.appendChild(emptyMsg);
-                }
-            });
-
-            // Listen to Chat
-            if (window.unsubscribeChat) window.unsubscribeChat();
-            window.unsubscribeChat = firebaseApp.listenToChat((messages) => {
-                const chatContainer = document.getElementById('chat-messages');
-                if (!chatContainer) return;
-                
-                chatContainer.innerHTML = '';
-                if (!messages || messages.length === 0) {
-                    chatContainer.innerHTML = `<div class="chat-empty" style="text-align: center; color: rgba(255,255,255,0.4); margin-top: auto; margin-bottom: auto;">أرسل رسالتك وسنرد عليك في أقرب وقت.</div>`;
-                    return;
-                }
-                
-                messages.forEach(msg => {
-                    let dateObj = msg.createdAt;
-                    if (dateObj && typeof dateObj.toDate === 'function') dateObj = dateObj.toDate();
-                    else if (dateObj && dateObj.seconds) dateObj = new Date(dateObj.seconds * 1000);
-                    else if (dateObj) dateObj = new Date(dateObj);
-                    else dateObj = new Date();
-                    
-                    let timeStr = isNaN(dateObj.getTime()) ? '' : dateObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-
-                    const isUser = !msg.isAdmin;
-                    const div = document.createElement('div');
-                    div.style.cssText = `background: ${isUser ? 'rgba(59, 130, 246, 0.2)' : 'rgba(255, 255, 255, 0.1)'}; border-radius: 12px; padding: 8px 12px; font-size: 13px; max-width: 80%; align-self: ${isUser ? 'flex-end' : 'flex-start'}; color: white; word-wrap: break-word; overflow-wrap: break-word;`;
-                    div.innerHTML = `
-                        <div style="margin-bottom: 2px;">${msg.text}</div>
-                        <div style="font-size: 10px; color: rgba(255,255,255,0.5); text-align: ${isUser ? 'left' : 'right'};">${timeStr}</div>
-                    `;
-                    chatContainer.appendChild(div);
-                });
-                
-                // Show notification for new message if not focused
-                const lastMsg = messages[messages.length - 1];
-                if (lastMsg && lastMsg.isAdmin && !isAppFocused) {
-                    if (window.electronAPI && window.electronAPI.showNotification) {
-                        window.electronAPI.showNotification('رسالة جديدة من الدعم الفني', lastMsg.text);
-                    } else if (window.Notification && Notification.permission === 'granted') {
-                        new Notification('رسالة جديدة من الدعم الفني', { body: lastMsg.text });
-                    }
-                }
-
-                // Auto scroll to bottom
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-            });
-
-            if (window.lucide) lucide.createIcons();
-        } else {
-            if (authSection) authSection.style.display = 'block';
-            if (profileSection) profileSection.style.display = 'none';
-            if (unsubscribeInbox) {
-                unsubscribeInbox();
-                unsubscribeInbox = null;
-            }
-            if (window.unsubscribeChat) {
-                window.unsubscribeChat();
-                window.unsubscribeChat = null;
-            }
-            if (window.unsubscribeUserStatus) {
-                window.unsubscribeUserStatus();
-                window.unsubscribeUserStatus = null;
-            }
-        }
-    });
-    
-    // Login
-    const handleLogin = async () => {
-        const u = document.getElementById('auth-username')?.value?.trim();
-        const p = document.getElementById('auth-password')?.value;
-        if (!u || !p) {
-            if (authError) authError.innerText = "Please enter username and password.";
-            return;
-        }
-        
-        if (authError) authError.innerText = "Logging in...";
-        const res = await firebaseApp.login(u, p);
-        if (!res.success) {
-            if (authError) authError.innerText = res.error;
-        } else {
-            // Check if user is banned before allowing access
-            try {
-                const uid = res.user.uid;
-                const userDoc = await firebaseApp.db.collection("users").doc(uid).get();
-                if (userDoc.exists && userDoc.data().status === 'disabled') {
-                    await firebaseApp.auth.signOut();
-                    if (authError) authError.innerText = "Your account has been suspended. Contact support.";
-                    return;
-                }
-            } catch (_) { /* allow login if check fails */ }
-            if (authError) authError.innerText = "";
-            showToast(`Welcome back, ${u}!`, '#10b981');
-        }
-    };
-
-    document.getElementById('btn-login')?.addEventListener('click', handleLogin);
-    document.getElementById('auth-password')?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') handleLogin();
-    });
-    document.getElementById('auth-username')?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') document.getElementById('auth-password')?.focus();
-    });
-    
-    // Register
-    document.getElementById('btn-register')?.addEventListener('click', async () => {
-        const u = document.getElementById('auth-username')?.value?.trim();
-        const p = document.getElementById('auth-password')?.value;
-        if (!u || !p) {
-            if (authError) authError.innerText = "Please enter username and password.";
-            return;
-        }
-        
-        if (authError) authError.innerText = "Registering...";
-        const res = await firebaseApp.register(u, p);
-        if (!res.success) {
-            if (authError) authError.innerText = res.error;
-        } else {
-            if (authError) authError.innerText = "";
-            showToast(`Account created successfully!`, '#10b981');
-        }
-    });
-    
-    // Login Anon
-    document.getElementById('btn-login-anon')?.addEventListener('click', async () => {
-        if (authError) authError.innerText = "Continuing as guest...";
-        const res = await firebaseApp.loginAnon();
-        if (!res.success) {
-            if (authError) authError.innerText = res.error;
-        } else {
-            if (authError) authError.innerText = "";
-            showToast('Signed in as Guest', '#3b82f6');
-        }
-    });
-    
-    // Chat System Submit
-    const handleSendChat = async () => {
-        const msgInput = document.getElementById('chat-input');
-        if (!msgInput) return;
-        const msg = msgInput.value.trim();
-        if (!msg) return;
-
-        const btn = document.getElementById('btn-send-chat');
-        const oldContent = btn ? btn.innerHTML : '';
-        if (btn) {
-            btn.innerHTML = '<i data-lucide="loader" class="spinner"></i>';
-            btn.disabled = true;
-        }
-        if (window.lucide) lucide.createIcons();
-
-        const res = await firebaseApp.sendChatMessage(msg);
-        if (res.success) {
-            msgInput.value = '';
-        } else {
-            showToast(res.error || 'Failed to send message', '#ef4444');
-        }
-
-        if (btn) {
-            btn.innerHTML = oldContent;
-            btn.disabled = false;
-        }
-        if (window.lucide) lucide.createIcons();
-    };
-
-    document.getElementById('btn-send-chat')?.addEventListener('click', handleSendChat);
-
-    document.getElementById('chat-input')?.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            handleSendChat();
-        }
-    });
-
-    // Logout
-    document.getElementById('btn-logout')?.addEventListener('click', async () => {
-        await firebaseApp.logout();
-        showToast('Logged out successfully', '#3b82f6');
-    });
-    
-    // Avatar Upload
-    document.getElementById('avatar-upload')?.addEventListener('change', async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        
-        const statusEl = document.getElementById('profile-status');
-        if (statusEl) statusEl.innerText = "Uploading avatar...";
-        const res = await firebaseApp.uploadAvatar(file);
-        
-        if (res.success) {
-            if (profileAvatar) profileAvatar.src = res.url;
-            if (statusEl) statusEl.innerText = "Member";
-            showToast("Avatar updated successfully!", "#10b981");
-        } else {
-            if (statusEl) statusEl.innerText = "Avatar upload failed: " + res.error;
-            showToast(res.error || "Avatar upload failed", "#ef4444");
-        }
-    });
-}
-
-// Call init if already loaded, else wait
-if (window.firebaseApp) {
-    initFirebaseAuth();
-} else {
-    window.addEventListener('firebase-ready', initFirebaseAuth);
 }
 
 // ============================================
@@ -3714,35 +4094,16 @@ if (window.electronAPI && window.electronAPI.onWindowFocusChange) {
 
 // Theme buttons in footer
 const btnLight = document.getElementById('btn-theme-light');
-const btnDark = document.getElementById('btn-theme-dark');
-if (btnLight && btnDark) {
-    btnLight.addEventListener('click', () => {
-        appSettings.theme = 'light';
-        saveSettings(appSettings);
-        applySettings();
-        initVanta();
-        btnLight.style.background = 'var(--accent-primary)';
-        btnLight.style.color = 'white';
-        btnDark.style.background = 'transparent';
-        btnDark.style.color = 'var(--text-muted)';
-    });
-    btnDark.addEventListener('click', () => {
-        appSettings.theme = 'dark';
-        saveSettings(appSettings);
-        applySettings();
-        initVanta();
-        btnDark.style.background = 'var(--accent-primary)';
-        btnDark.style.color = 'white';
-        btnLight.style.background = 'transparent';
-        btnLight.style.color = 'var(--text-muted)';
-    });
-}
+const btnCyberpunk = document.getElementById('btn-theme-cyberpunk');
+btnLight?.addEventListener('click', () => setAppTheme('light'));
+btnCyberpunk?.addEventListener('click', () => setAppTheme('cyberpunk'));
 
 
 // Drag and Drop Logic
 let dragCounter = 0;
 document.addEventListener('dragenter', (e) => {
     e.preventDefault();
+    if (document.getElementById('view-tools')?.classList.contains('active') && e.dataTransfer?.types?.includes('Files')) return;
     dragCounter++;
     const overlay = document.getElementById('drag-drop-overlay');
     if (overlay) overlay.style.display = 'flex';
@@ -3752,6 +4113,7 @@ document.addEventListener('dragover', (e) => {
 });
 document.addEventListener('dragleave', (e) => {
     e.preventDefault();
+    if (document.getElementById('view-tools')?.classList.contains('active') && e.dataTransfer?.types?.includes('Files')) return;
     dragCounter--;
     if (dragCounter === 0) {
         const overlay = document.getElementById('drag-drop-overlay');
@@ -3760,6 +4122,7 @@ document.addEventListener('dragleave', (e) => {
 });
 document.addEventListener('drop', (e) => {
     e.preventDefault();
+    if (document.getElementById('view-tools')?.classList.contains('active') && e.dataTransfer?.types?.includes('Files')) return;
     dragCounter = 0;
     const overlay = document.getElementById('drag-drop-overlay');
     if (overlay) overlay.style.display = 'none';
@@ -3784,166 +4147,3 @@ document.getElementById('btn-clear-completed')?.addEventListener('click', () => 
             .catch(e => console.error(e));
     }
 });
-// ==========================================
-// ADMIN CONTROL PANEL LOGIC
-// ==========================================
-document.addEventListener("DOMContentLoaded", function() {
-    var btnManageUsers = document.getElementById("btn-admin-manage-users");
-    var btnBroadcast = document.getElementById("btn-admin-broadcast");
-    var btnRefreshUsers = document.getElementById("btn-admin-refresh-users");
-    var usersList = document.getElementById("admin-users-list");
-    var usersSection = document.getElementById("admin-users-list-section");
-
-    if (btnManageUsers) {
-        btnManageUsers.addEventListener("click", async function() {
-            if (usersSection.style.display === "block") {
-                usersSection.style.display = "none";
-                return;
-            }
-            usersSection.style.display = "block";
-            await loadAdminUsers();
-        });
-    }
-
-    if (btnRefreshUsers) {
-        btnRefreshUsers.addEventListener("click", function() { loadAdminUsers(); });
-    }
-
-    if (btnBroadcast) {
-        btnBroadcast.addEventListener("click", async function() {
-            var msg = prompt("ادخل نص الاعلان العام لجميع المستخدمين:");
-            if (msg && msg.trim()) {
-                try {
-                    var snap = await window.firebaseApp.db.collection("users").get();
-                    var count = 0;
-                    var batch = window.firebaseApp.db.batch();
-                    snap.forEach(function(doc) {
-                        var msgRef = window.firebaseApp.db.collection("users").doc(doc.id).collection("messages").doc();
-                        batch.set(msgRef, {
-                            message: msg.trim(),
-                            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-                            read: false
-                        });
-                        count++;
-                    });
-                    await batch.commit();
-                    if (typeof showToast === "function") showToast("تم ارسال الاعلان ل " + count + " مستخدم بنجاح!", "#10b981");
-                } catch(e) {
-                    console.error(e);
-                    if (typeof showToast === "function") showToast("فشل ارسال الاعلان: " + e.message, "#ef4444");
-                }
-            }
-        });
-    }
-
-    async function loadAdminUsers() {
-        if (!usersList) return;
-        usersList.innerHTML = '<div style="color: #fff; text-align: center; padding: 20px;">جاري تحميل المستخدمين...</div>';
-        try {
-            var snapshot = await window.firebaseApp.db.collection("users").get();
-            usersList.innerHTML = "";
-            if (snapshot.empty) {
-                usersList.innerHTML = '<div style="color: #fff; text-align: center;">لا يوجد مستخدمين.</div>';
-                return;
-            }
-            snapshot.forEach(function(doc) {
-                var u = doc.data();
-                var isBanned = u.status === "disabled" || u.banned;
-                var div = document.createElement("div");
-                div.className = "admin-user-row";
-                div.style = "display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.05); padding: 10px 12px; border-radius: 8px; transition: background 0.2s;";
-                var photoUrl = u.photoURL || "icon.ico";
-                var username = u.username || doc.id;
-                var statusColor = isBanned ? "#ef4444" : "#10b981";
-                var statusText = isBanned ? "محظور" : "نشط";
-                var btnText = isBanned ? "رفع الحظر" : "حظر";
-                var btnStyle = isBanned ? "background: rgba(16,185,129,0.15); color: #10b981; border: 1px solid rgba(16,185,129,0.3);" : "background: rgba(239,68,68,0.15); color: #ef4444; border: 1px solid rgba(239,68,68,0.3);";
-
-                var infoDiv = document.createElement("div");
-                infoDiv.style = "display: flex; align-items: center; gap: 10px;";
-                infoDiv.innerHTML = '<img src="' + photoUrl + '" style="width: 32px; height: 32px; border-radius: 50%; object-fit: cover;"><div><div style="color: #fff; font-size: 13px; font-weight: 600;">' + username + '</div><div style="color: ' + statusColor + '; font-size: 10px; font-weight: 500;">' + statusText + '</div></div>';
-
-                var btn = document.createElement("button");
-                btn.style = "padding: 5px 12px; font-size: 11px; border-radius: 6px; cursor: pointer; font-weight: 600; border: none; " + btnStyle;
-                btn.textContent = btnText;
-                btn.addEventListener("click", function() { window.adminToggleBanUser(doc.id, isBanned); });
-
-                div.appendChild(infoDiv);
-                div.appendChild(btn);
-                usersList.appendChild(div);
-            });
-        } catch(e) {
-            usersList.innerHTML = '<div style="color: #ef4444; text-align: center;">خطأ في تحميل المستخدمين.</div>';
-            console.error(e);
-        }
-    }
-
-    window.adminToggleBanUser = async function(uid, currentlyBanned) {
-        var reason = currentlyBanned ? "" : prompt("ادخل سبب الحظر:");
-        if (!currentlyBanned && reason === null) return;
-        try {
-            await window.firebaseApp.db.collection("users").doc(uid).update({
-                status: currentlyBanned ? "active" : "disabled",
-                banned: !currentlyBanned,
-                banReason: reason || "مخالفة الشروط"
-            });
-            if (typeof showToast === "function") showToast(currentlyBanned ? "تم رفع الحظر بنجاح!" : "تم حظر المستخدم بنجاح!", "#10b981");
-            await loadAdminUsers();
-        } catch(e) {
-            console.error(e);
-            if (typeof showToast === "function") showToast("فشل تحديث حالة المستخدم: " + e.message, "#ef4444");
-        }
-    };
-});
-
-// Dynamic Placeholder Animation
-(function initDynamicPlaceholder() {
-    const input = document.getElementById('url-input');
-    if (!input) return;
-    
-    const phrases = [
-        "Paste link from Spotify...",
-        "Paste link from YouTube...",
-        "Paste link from TikTok...",
-        "Paste link from Instagram...",
-        "Paste direct file link..."
-    ];
-    let phraseIndex = 0;
-    let charIndex = 0;
-    let isDeleting = false;
-    let typeDelay = 100;
-    
-    function typeEffect() {
-        if (input.style.display === 'none') {
-            setTimeout(typeEffect, 1000);
-            return;
-        }
-
-        const currentPhrase = phrases[phraseIndex];
-        
-        if (isDeleting) {
-            input.setAttribute('placeholder', currentPhrase.substring(0, charIndex - 1));
-            charIndex--;
-            typeDelay = 50; // faster deletion
-        } else {
-            input.setAttribute('placeholder', currentPhrase.substring(0, charIndex + 1));
-            charIndex++;
-            typeDelay = 100;
-        }
-        
-        if (!isDeleting && charIndex === currentPhrase.length) {
-            isDeleting = true;
-            typeDelay = 2000; // pause at end
-        } else if (isDeleting && charIndex === 0) {
-            isDeleting = false;
-            phraseIndex = (phraseIndex + 1) % phrases.length;
-            typeDelay = 500; // pause before typing next
-        }
-        
-        setTimeout(typeEffect, typeDelay);
-    }
-    
-    setTimeout(typeEffect, 1000);
-})();
-
-

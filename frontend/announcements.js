@@ -70,6 +70,7 @@
                 setTimeout(fetchAndShowAnnouncements, 1000);
                 return;
             }
+            await window.firebaseApp.ready;
 
             let isInitial = true;
             window.firebaseApp.db.collection("announcements")
@@ -286,6 +287,7 @@
         // Firebase realtime listener for update-type announcements (fallback / supplementary)
         try {
             if (!window.firebaseApp || !window.firebaseApp.db) return;
+            await window.firebaseApp.ready;
             
             if (!window.unsubscribeUpdates) {
                 window.unsubscribeUpdates = window.firebaseApp.db.collection('app_config').doc('latest_update')
@@ -349,6 +351,26 @@
     function setupElectronUpdaterUI() {
         if (!window.electronAPI || !window.electronAPI.onUpdateStatus) return;
 
+        const updateReportKey = 'ledo_last_app_update_check';
+        const displayCheckTime = value => {
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('ar-EG', { dateStyle: 'short', timeStyle: 'short' }).format(date);
+        };
+        try {
+            const previous = JSON.parse(localStorage.getItem(updateReportKey) || 'null');
+            const statusEl = document.getElementById('update-check-status');
+            if (statusEl) statusEl.textContent = 'لم تُسجّل نتيجة فحص سابقة بعد.';
+            if (previous && statusEl) {
+                const checked = displayCheckTime(previous.checkedAt);
+                statusEl.textContent = previous.status === 'not-available'
+                    ? `آخر فحص ${checked} · لا يوجد إصدار أحدث${previous.version ? ` (v${previous.version})` : ''}.`
+                    : previous.status === 'available'
+                        ? `آخر فحص ${checked} · الإصدار v${previous.version} متاح.`
+                        : `آخر محاولة فحص ${checked} · تعذر الاتصال بخادم التحديثات.`;
+                statusEl.style.color = previous.status === 'error' ? '#ef4444' : '#10b981';
+            }
+        } catch (_) {}
+
         window.electronAPI.onUpdateStatus((data) => {
             const checkBtn = document.getElementById('btn-manual-check-update');
             const statusEl = document.getElementById('update-check-status');
@@ -356,6 +378,11 @@
             const progressBar = document.getElementById('update-progress-bar');
             const progressText = document.getElementById('update-progress-text');
             const installBtn = document.getElementById('btn-install-update');
+            const checkedAt = data.checkedAt || new Date().toISOString();
+
+            if (['not-available', 'available', 'error'].includes(data.status)) {
+                try { localStorage.setItem(updateReportKey, JSON.stringify({ status: data.status, version: data.version || '', checkedAt, message: data.message || '' })); } catch (_) {}
+            }
 
             switch (data.status) {
                 case 'checking':
@@ -369,7 +396,7 @@
 
                 case 'available':
                     if (statusEl) {
-                        statusEl.textContent = '🎉 تحديث جديد متوفر: v' + data.version;
+                        statusEl.textContent = `🎉 إصدار جديد متوفر: v${data.version} · آخر فحص ${displayCheckTime(checkedAt)}`;
                         statusEl.style.color = '#818cf8';
                     }
                     if (checkBtn) {
@@ -410,24 +437,12 @@
                             }
                         };
                     }
-                    if (window.Toastify) {
-                        window.Toastify({
-                            text: '🚀 تم تحميل التحديث v' + data.version + '! اضغط "تثبيت الآن" لتحديث البرنامج.',
-                            duration: 8000,
-                            gravity: 'top',
-                            position: 'center',
-                            style: {
-                                background: 'linear-gradient(135deg, #6366f1, #4f46e5)',
-                                borderRadius: '10px',
-                                fontWeight: '600'
-                            }
-                        }).showToast();
-                    }
+                    window.showToast?.('🚀 تم تحميل التحديث v' + data.version + '! اضغط "تثبيت الآن" لتحديث البرنامج.', '#6366f1', 8000);
                     break;
 
                 case 'not-available':
                     if (statusEl) {
-                        statusEl.textContent = '✨ أنت تستخدم أحدث إصدار!';
+                        statusEl.textContent = `✨ لا يوجد إصدار أحدث · آخر فحص ${displayCheckTime(checkedAt)}${data.version ? ` (v${data.version})` : ''}`;
                         statusEl.style.color = '#10b981';
                     }
                     if (checkBtn) {
@@ -435,16 +450,11 @@
                         checkBtn.innerHTML = '<i data-lucide="refresh-cw"></i> التحقق من التحديثات';
                     }
                     if (progressContainer) progressContainer.style.display = 'none';
-                    setTimeout(function() {
-                        if (statusEl && statusEl.textContent.indexOf('أحدث إصدار') !== -1) {
-                            statusEl.textContent = '';
-                        }
-                    }, 5000);
                     break;
 
                 case 'error':
                     if (statusEl) {
-                        statusEl.textContent = 'تعذر التحقق من التحديثات حالياً';
+                        statusEl.textContent = `تعذر التحقق من التحديثات · آخر محاولة ${displayCheckTime(checkedAt)}${data.message ? ` · ${data.message}` : ''}`;
                         statusEl.style.color = '#ef4444';
                     }
                     if (checkBtn) {
@@ -456,6 +466,145 @@
                     break;
             }
 
+            if (window.lucide) window.lucide.createIcons();
+        });
+    }
+
+    function setupEngineUpdaterUI() {
+        const button = document.getElementById('btn-check-engine-updates');
+        const status = document.getElementById('engine-update-status');
+        const progressContainer = document.getElementById('engine-update-progress-container');
+        const progressBar = document.getElementById('engine-update-progress-bar');
+        const progressText = document.getElementById('engine-update-progress-text');
+        const powerShellButton = document.getElementById('btn-engine-update-powershell');
+        const details = document.getElementById('engine-update-details');
+        const detailsContent = document.getElementById('engine-update-details-content');
+        if (!button || !window.electronAPI) return;
+        if (status) status.textContent = 'لم يُسجّل فحص سابق لمكتبات المحرك على هذا الجهاز.';
+
+        const updateTime = value => {
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('ar-EG', { dateStyle: 'short', timeStyle: 'short' }).format(date);
+        };
+        const renderEngineReport = report => {
+            if (!report) return;
+            const checked = updateTime(report.checkedAt);
+            const changes = Array.isArray(report.changes) ? report.changes : [];
+            const versions = report.packageVersions && typeof report.packageVersions === 'object' ? Object.entries(report.packageVersions) : [];
+            if (status) {
+                if (report.status === 'staged') {
+                    status.textContent = changes.length
+                        ? `آخر تحديث ${checked} · تغيّرت ${changes.length} مكتبة من ${report.packageCount || versions.length}. أعد تشغيل التطبيق لتطبيقها.`
+                        : `تحديث المكتبات جاهز للتطبيق بعد إعادة التشغيل · آخر فحص ${checked}.`;
+                    status.style.color = '#10b981';
+                } else if (report.status === 'applied') {
+                    status.textContent = `تم تطبيق تحديث المكتبات بعد إعادة التشغيل · ${checked} · ${report.packageCount || versions.length} حزمة.`;
+                    status.style.color = '#10b981';
+                } else if (report.status === 'up-to-date' && report.restartRequired) {
+                    status.textContent = `المكتبات محدّثة، لكن التحديث لم يُحمّل في المحرك بعد. أعد التشغيل · آخر فحص ${checked}.`;
+                    status.style.color = '#f59e0b';
+                } else if (report.status === 'up-to-date') {
+                    status.textContent = `آخر فحص ${checked} · لم تتغير المكتبات (${report.packageCount || versions.length} حزمة؛ yt-dlp ${report.currentVersion || '—'}).`;
+                    status.style.color = '#10b981';
+                } else if (report.status === 'error') {
+                    status.textContent = `فشل آخر فحص ${checked} · ${report.error || 'تعذر التحقق من المكتبات.'}`;
+                    status.style.color = '#ef4444';
+                }
+            }
+            if (details && detailsContent && (changes.length || versions.length)) {
+                details.hidden = false;
+                const rows = changes.length
+                    ? changes.map(item => `<tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(item.from || 'تثبيت جديد')}</td><td>${escapeHtml(item.to || '—')}</td></tr>`)
+                    : versions.map(([name, version]) => `<tr><td>${escapeHtml(name)}</td><td>—</td><td>${escapeHtml(version)}</td></tr>`);
+                details.querySelector('summary').textContent = changes.length
+                    ? `المكتبات التي تغيّرت (${changes.length})`
+                    : `الإصدارات الحالية (${versions.length})`;
+                detailsContent.innerHTML = `<div style="max-height:260px;overflow:auto;border:1px solid var(--border-color);border-radius:8px;"><table style="width:100%;border-collapse:collapse;font-size:11px;text-align:right;"><thead><tr><th style="padding:7px;">المكتبة</th><th style="padding:7px;">الإصدار السابق</th><th style="padding:7px;">الإصدار الجديد</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;
+            }
+        };
+
+        window.electronAPI.getEngineUpdateReport?.().then(renderEngineReport).catch(() => {});
+
+        powerShellButton?.addEventListener('click', async () => {
+            const result = await window.electronAPI.openEngineUpdatePowerShell?.();
+            if (status) {
+                status.textContent = result?.success
+                    ? 'تم فتح PowerShell. اتبع التعليمات، وبعد نجاح التحديث أغلق Ledo Downloader وافتحه مجددًا.'
+                    : (result?.error || 'تعذر فتح PowerShell.');
+                status.style.color = result?.success ? '#fbbf24' : '#ef4444';
+            }
+        });
+
+        button.addEventListener('click', async () => {
+            button.disabled = true;
+            if (status) {
+                status.textContent = 'جارٍ فحص Python 3.13 ومكتبات requirements.txt...';
+                status.style.color = 'var(--text-muted)';
+            }
+            try {
+                const result = await window.electronAPI.checkEngineUpdates();
+                if (!result?.success && status) {
+                    status.textContent = result?.error || 'تعذر فحص تحديثات المكتبات.';
+                    status.style.color = '#ef4444';
+                }
+            } catch (error) {
+                if (status) {
+                    status.textContent = error?.message || 'تعذر فحص تحديثات المكتبات.';
+                    status.style.color = '#ef4444';
+                }
+                button.disabled = false;
+            }
+        });
+
+        window.electronAPI.onEngineUpdateStatus?.((data) => {
+            switch (data.status) {
+                case 'checking':
+                    button.disabled = true;
+                    if (powerShellButton) powerShellButton.hidden = true;
+                    if (status) status.textContent = data.detail || 'جارٍ فحص Python 3.13 ومكتبات requirements.txt...';
+                    break;
+                case 'downloading':
+                    button.disabled = true;
+                    if (status) status.textContent = data.detail || 'جارٍ تنزيل وتثبيت أحدث الإصدارات المتوافقة من requirements.txt...';
+                    if (progressContainer) progressContainer.style.display = 'block';
+                    if (progressBar && Number.isFinite(data.percent)) progressBar.style.width = `${data.percent.toFixed(1)}%`;
+                    if (progressText) progressText.textContent = Number.isFinite(data.percent) ? `${data.percent.toFixed(0)}%` : '…';
+                    break;
+                case 'validating':
+                    button.disabled = true;
+                    if (status) status.textContent = 'جارٍ التحقق من توافق المكتبات مع محرك التحميل قبل تفعيلها...';
+                    if (progressContainer) progressContainer.style.display = 'none';
+                    break;
+                case 'up-to-date':
+                    button.disabled = false;
+                    renderEngineReport(data);
+                    if (progressContainer) progressContainer.style.display = 'none';
+                    break;
+                case 'staged':
+                    button.disabled = false;
+                    if (powerShellButton) powerShellButton.hidden = true;
+                    renderEngineReport(data);
+                    if (progressContainer) progressContainer.style.display = 'none';
+                    window.showToast?.(data.changes?.length
+                        ? `تغيّرت ${data.changes.length} مكتبة. أعد تشغيل Ledo Downloader لتطبيقها.`
+                        : 'تحديث المكتبات جاهز. أعد تشغيل Ledo Downloader لتطبيقه.', '#10b981', 7000);
+                    break;
+                case 'applied':
+                    button.disabled = false;
+                    renderEngineReport(data);
+                    if (progressContainer) progressContainer.style.display = 'none';
+                    break;
+                case 'error':
+                    button.disabled = false;
+                    if (powerShellButton) powerShellButton.hidden = !data.powerShellFallback;
+                    if (status) {
+                        status.textContent = `${data.error || 'فشل تحديث المكتبات.'}${data.powerShellFallback ? ' إذا منعت حماية Windows التحديث، افتح PowerShell لإعادة المحاولة.' : ''}`;
+                        status.style.color = '#ef4444';
+                    }
+                    renderEngineReport(data);
+                    if (progressContainer) progressContainer.style.display = 'none';
+                    break;
+            }
             if (window.lucide) window.lucide.createIcons();
         });
     }
@@ -526,6 +675,7 @@
         if (!root) return;
         try {
             if (!window.firebaseApp || !window.firebaseApp.db) return;
+            await window.firebaseApp.ready;
             
             const docRef = await window.firebaseApp.db.collection('app_config').doc('public_links').get();
             if (!docRef.exists) return;
@@ -630,6 +780,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             initUI();
             setupElectronUpdaterUI();
+            setupEngineUpdaterUI();
             // Slight delay so the UI finishes painting before modals pop
             setTimeout(() => {
                 fetchAndShowAnnouncements();
@@ -640,6 +791,7 @@
     } else {
         initUI();
         setupElectronUpdaterUI();
+        setupEngineUpdaterUI();
         setTimeout(() => {
             fetchAndShowAnnouncements();
             checkForAppUpdates(false);

@@ -1,8 +1,13 @@
 const API_URL = 'http://127.0.0.1:8000/api';
-const os = require('os');
-const path = require('path');
-const fs = require('fs');
-const { ipcRenderer, clipboard } = require('electron');
+const appApi = window.electronAPI;
+const os = { homedir: appApi.osHomedir };
+const path = {
+    basename: appApi.pathBasename,
+    dirname: appApi.pathDirname,
+    extname: appApi.pathExtname,
+    join: appApi.pathJoin
+};
+const fs = { existsSync: appApi.fsExistsSync, mkdirSync: appApi.fsMkdirSync };
 
 // DOM Elements
 const windowContainer = document.getElementById('window-container');
@@ -10,9 +15,6 @@ const filenameInput = document.getElementById('filename-input');
 const urlInput = document.getElementById('url-input');
 const domainBadge = document.getElementById('domain-badge');
 const domainText = document.getElementById('domain-text');
-const extBadge = document.getElementById('ext-badge');
-const heroIcon = document.getElementById('hero-icon');
-const fileIconBox = document.getElementById('file-icon-box');
 const fileSizeDisplay = document.getElementById('file-size-display');
 const categoryChipText = document.getElementById('category-chip-text');
 
@@ -46,6 +48,9 @@ let currentMetadata = {
     file_size: null,
     sizes: null,
     mime_type: '',
+    native_browser_download: false,
+    native_download_paused: true,
+    native_download_id: null,
     cookies: null,
     user_agent: null,
     type: 'unknown'
@@ -111,15 +116,6 @@ function looksLikeFilename(val) {
     const ext = path.extname(base).toLowerCase();
     return KNOWN_EXTENSIONS.has(ext) && !SERVER_SCRIPT_EXTENSIONS.has(ext);
 }
-
-const ICONS = {
-    'Programs': `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="9" y1="21" x2="9" y2="9"></line></svg>`,
-    'Compressed': `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>`,
-    'Video': `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>`,
-    'Audio': `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`,
-    'Documents': `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>`,
-    'General': `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`
-};
 
 function formatBytes(bytes, decimals = 2) {
     if (!+bytes || bytes <= 0) return 'Unknown Size';
@@ -407,6 +403,13 @@ function resetFormState() {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
         <span>Download Later</span>
     `;
+    btnRetry.style.display = '';
+    errorBanner.classList.remove('native-download-notice');
+    filenameInput.disabled = false;
+    categorySelect.disabled = false;
+    savePathInput.closest('.form-group').style.display = '';
+    rememberPath.closest('.checkbox-container').style.display = '';
+    threadsSelect.closest('.threads-selector').style.display = '';
 
     // Hide banners and loaders
     errorBanner.style.display = 'none';
@@ -427,10 +430,6 @@ function updateUI() {
     const filename = sanitizeFilename(currentMetadata.filename || filenameFromUrl(currentMetadata.url) || 'downloaded_file');
     filenameInput.value = filename;
 
-    // Detect extension
-    const ext = path.extname(filename).toLowerCase().replace('.', '') || 'FILE';
-    extBadge.innerText = ext.toUpperCase();
-
     // Determine category
     const cat = determineCategory(filename, currentMetadata.url);
     categorySelect.value = cat;
@@ -439,9 +438,6 @@ function updateUI() {
 
     // Update container theme class
     windowContainer.className = `window-container cat-${cat.toLowerCase()}`;
-
-    // Update category icon
-    fileIconBox.innerHTML = ICONS[cat] || ICONS['General'];
 
     // Update size
     let sizeToShow = currentMetadata.file_size;
@@ -472,8 +468,6 @@ categorySelect.addEventListener('change', (e) => {
     lblCategory.innerText = cat;
     categoryChipText.innerText = cat;
     windowContainer.className = `window-container cat-${cat.toLowerCase()}`;
-    fileIconBox.innerHTML = ICONS[cat] || ICONS['General'];
-
     const filename = filenameInput.value || 'downloaded_file';
     if (!userSelectedSavePath) {
         const targetDir = getCategorySaveDir(cat);
@@ -507,9 +501,6 @@ qualitySelect.addEventListener('change', (e) => {
 // Filename edit sync with save path
 filenameInput.addEventListener('input', () => {
     const fn = sanitizeFilename(filenameInput.value);
-    const ext = path.extname(fn).toLowerCase().replace('.', '') || 'FILE';
-    extBadge.innerText = ext.toUpperCase();
-    
     const currentDir = path.dirname(savePathInput.value) || getCategorySaveDir(categorySelect.value);
     savePathInput.value = path.join(currentDir, fn);
 });
@@ -520,7 +511,7 @@ savePathInput.addEventListener('input', () => {
 
 // Browse folder
 btnBrowse.addEventListener('click', async () => {
-    const res = await ipcRenderer.invoke('select-folder');
+    const res = await appApi.selectFolder();
     if (res && typeof res === 'string' && res.length > 0) {
         const selectedDir = res;
         const fn = sanitizeFilename(filenameInput.value);
@@ -542,8 +533,8 @@ urlInput.addEventListener('keydown', (e) => {
     }
 });
 
-btnPasteUrl.addEventListener('click', () => {
-    const text = clipboard.readText().trim();
+btnPasteUrl.addEventListener('click', async () => {
+    const text = (await appApi.readClipboardText()).trim();
     if (!text) return;
     urlInput.value = text;
     analyzeUrl(text);
@@ -555,10 +546,10 @@ btnAnalyzeUrl.addEventListener('click', () => {
 });
 
 // Copy URL Button
-btnCopyUrl.addEventListener('click', () => {
+btnCopyUrl.addEventListener('click', async () => {
     if (currentMetadata.url) {
-        clipboard.writeText(currentMetadata.url);
-        btnCopyUrl.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+        await appApi.writeClipboardText(currentMetadata.url);
+        btnCopyUrl.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
         setTimeout(() => {
             btnCopyUrl.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>`;
         }, 1500);
@@ -566,15 +557,74 @@ btnCopyUrl.addEventListener('click', () => {
 });
 
 function closeWindow() {
-    ipcRenderer.send('hide-quick-add');
+    appApi.hideQuickAdd();
 }
 
 btnClose.addEventListener('click', closeWindow);
-btnCancel.addEventListener('click', closeWindow);
+btnCancel.addEventListener('click', () => {
+    if (currentMetadata.native_browser_download) {
+        handleNativeTelegramChoice('cancel');
+        return;
+    }
+    closeWindow();
+});
+
+async function handleNativeTelegramChoice(choice) {
+    const downloadId = currentMetadata.native_download_id;
+    if (!Number.isInteger(downloadId)) {
+        errorBanner.classList.add('native-download-notice');
+        errorText.innerText = 'Quick Add could not control this Telegram transfer. Cancel it in Chrome and try again.';
+        errorBanner.style.display = 'flex';
+        return;
+    }
+
+    btnStartDownload.disabled = true;
+    btnDownloadLater.disabled = true;
+    btnCancel.disabled = true;
+    btnClose.disabled = true;
+    errorBanner.style.display = 'none';
+    const statusText = choice === 'resume' ? 'Starting in browser…' : 'Canceling…';
+    btnStartDownload.innerHTML = `<span class="sniff-spinner"></span><span>${statusText}</span>`;
+
+    try {
+        await axios.post(`${API_URL}/quick-add/native-download-choice`, {
+            download_id: downloadId,
+            choice
+        }, { timeout: 8000 });
+
+        if (choice === 'resume') {
+            btnStartDownload.innerHTML = '<span>Started in browser</span>';
+            errorBanner.classList.add('native-download-notice');
+            errorText.innerText = 'Telegram is transferring the file through its signed-in browser session. Check Chrome Downloads for progress.';
+            errorBanner.style.display = 'flex';
+            setTimeout(closeWindow, 1500);
+        } else {
+            closeWindow();
+        }
+    } catch (err) {
+        btnStartDownload.disabled = false;
+        btnDownloadLater.disabled = false;
+        btnCancel.disabled = false;
+        btnClose.disabled = false;
+        btnStartDownload.innerHTML = '<span id="btn-start-text">Start in Browser</span>';
+        errorBanner.classList.add('native-download-notice');
+        errorText.innerText = err.response?.data?.detail || 'Could not reach the browser extension. The Telegram transfer is still paused.';
+        errorBanner.style.display = 'flex';
+    }
+}
 
 // Start Download Logic
 async function handleStartDownload(isLater = false) {
     if (!currentMetadata.url) return;
+
+    if (currentMetadata.native_browser_download) {
+        if (isLater) {
+            closeWindow(); // Leave the native browser transfer paused.
+            return;
+        }
+        await handleNativeTelegramChoice('resume');
+        return;
+    }
 
     if (rememberPath.checked) {
         saveCategoryPath(categorySelect.value, path.dirname(savePathInput.value));
@@ -600,6 +650,7 @@ async function handleStartDownload(isLater = false) {
     const payload = {
         url: currentMetadata.url,
         save_path: path.dirname(savePathInput.value),
+        title: filenameInput.value.trim(),
         quality: quality,
         is_yt_dlp: isDirect ? false : (cat === 'Video' || cat === 'Audio' ? null : false),
         cookies: currentMetadata.cookies || null,
@@ -627,7 +678,7 @@ async function handleStartDownload(isLater = false) {
         if (!isLater) {
             btnStartDownload.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> <span>Started!</span>`;
         } else {
-            btnDownloadLater.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> <span>Queued!</span>`;
+            btnDownloadLater.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> <span>Queued!</span>`;
         }
 
         setTimeout(() => {
@@ -640,7 +691,7 @@ async function handleStartDownload(isLater = false) {
         resetFormState();
         errorText.innerText = err.response?.data?.detail || err.message || 'Failed to start download.';
         errorBanner.style.display = 'flex';
-        btnStartDownload.innerHTML = `<span>⚡ Retry Download</span>`;
+        btnStartDownload.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7v5h-5"></path><path d="M4 17v-5h5"></path><path d="M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5a7 7 0 0 0 11.6-2"></path></svg><span>Retry Download</span>`;
     }
 }
 
@@ -678,12 +729,47 @@ window.updateQuickAddInfo = async function(metadata) {
         file_size: metadata.file_size || null,
         sizes: null,
         mime_type: metadata.mime_type || '',
+        native_browser_download: metadata.native_browser_download === true,
+        native_download_paused: metadata.native_download_paused === true,
+        native_download_id: Number.isInteger(metadata.native_download_id) ? metadata.native_download_id : null,
         cookies: metadata.cookies || null,
         user_agent: metadata.user_agent || null,
         referer: metadata.referer || null,
         type: 'unknown'
     };
     userSelectedSavePath = false;
+
+    if (currentMetadata.native_browser_download) {
+        updateUI();
+        sniffingLoader.style.display = 'none';
+        errorBanner.style.display = 'flex';
+        errorBanner.classList.add('native-download-notice');
+        errorText.innerText = currentMetadata.native_download_paused
+            ? 'Telegram Web only gives this file to your signed-in browser. It is paused now. Start via Browser resumes it; Chrome handles the transfer, save location, and progress. Ledo cannot run this URL through its own download engine.'
+            : 'Chrome could not pause this Telegram transfer, so it may already be downloading. Ledo cannot take over this session-only URL; use Cancel to stop the browser transfer.';
+        btnRetry.style.display = 'none';
+        filenameInput.disabled = true;
+        categorySelect.disabled = true;
+        savePathInput.closest('.form-group').style.display = 'none';
+        rememberPath.closest('.checkbox-container').style.display = 'none';
+        threadsSelect.closest('.threads-selector').style.display = 'none';
+        const startText = btnStartDownload.querySelector('#btn-start-text');
+        if (startText) startText.textContent = currentMetadata.native_download_paused ? 'Start in Browser' : 'Already Downloading';
+        const laterText = btnDownloadLater.querySelector('span');
+        if (laterText) laterText.textContent = 'Keep Paused';
+        if (!currentMetadata.native_download_paused) {
+            btnStartDownload.disabled = true;
+            btnDownloadLater.disabled = true;
+        }
+        return;
+    }
+
+    if (!currentMetadata.url) {
+        updateUI();
+        sniffingLoader.style.display = 'none';
+        urlInput.focus();
+        return;
+    }
 
     // If filename is missing, attempt to extract from URL (including query params)
     if (!currentMetadata.filename && currentMetadata.url) {
@@ -733,6 +819,17 @@ window.updateQuickAddInfo = async function(metadata) {
         }
     }
 };
+
+appApi.onQuickAddPayload((metadata) => {
+    if (typeof window.updateQuickAddInfo === 'function') {
+        window.updateQuickAddInfo(metadata || {});
+    }
+});
+
+appApi.onQuickAddFocusUrl(() => {
+    urlInput.focus();
+    urlInput.setSelectionRange(urlInput.value.length, urlInput.value.length);
+});
 
 // Auto-select filename on focus for fast renaming
 filenameInput.addEventListener('focus', () => {
