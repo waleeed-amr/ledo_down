@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Ledo Downloader Integration",
-  "version": "4.1.3",
-  "description": "Download media, block ads on YouTube & social media, and intercept downloads with Ledo.",
+  "version": "4.3.0",
+  "description": "Download media, block ads, and inspect or intercept selected browser requests.",
   "permissions": [
     "contextMenus",
     "activeTab",
@@ -11,10 +11,12 @@
     "downloads",
     "storage",
     "alarms",
+    "offscreen",
     "declarativeNetRequest",
     "declarativeNetRequestFeedback",
     "webRequest",
-    "webNavigation"
+    "webNavigation",
+    "debugger"
   ],
   "host_permissions": [
     "<all_urls>",

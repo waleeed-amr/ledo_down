@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>فاحص الشبكة | ليدو</title>
+  <style>
+    :root { color-scheme: light; font-family: "Segoe UI", Tahoma, sans-serif; --ink:#172033; --muted:#64748b; --line:#dce4ef; --blue:#4f46e5; --green:#059669; --red:#dc2626; --amber:#b45309; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:#f4f7fb; }
+    header { background:linear-gradient(115deg,#111827,#253b68); color:#fff; padding:25px max(22px,calc((100% - 1420px)/2)); }
+    .head-row { display:flex; justify-content:space-between; align-items:center; gap:20px; }
+    h1 { margin:0 0 6px; font-size:24px; }
+    .subtitle { color:#cbd5e1; font-size:13px; }
+    .head-actions,.toolbar,.filters,.row-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    button,input { font:inherit; }
+    button { border:1px solid var(--line); border-radius:8px; padding:8px 12px; background:#fff; color:var(--ink); font-size:12px; font-weight:700; cursor:pointer; }
+    button:hover { border-color:#a5b4fc; color:var(--blue); }
+    button:disabled { opacity:.6; cursor:wait; }
+    button.primary { color:white; background:var(--blue); border-color:var(--blue); }
+    button.allow { color:var(--green); border-color:#a7f3d0; background:#f0fdf4; }
+    button.block { color:var(--red); border-color:#fecaca; background:#fff7f7; }
+    main { width:min(1420px,calc(100% - 40px)); margin:20px auto 50px; }
+    .summary { display:grid; grid-template-columns:repeat(5,minmax(130px,1fr)); gap:12px; margin-bottom:16px; }
+    .metric,.panel { background:#fff; border:1px solid var(--line); border-radius:13px; box-shadow:0 3px 12px rgba(15,23,42,.04); }
+    .metric { padding:15px 17px; }
+    .metric strong { display:block; font-size:25px; line-height:1.1; margin-bottom:5px; }
+    .metric span { color:var(--muted); font-size:12px; }
+    .metric.bad strong { color:var(--red); }.metric.good strong { color:var(--green); }.metric.warn strong { color:var(--amber); }
+    .panel { padding:16px; }
+    .panel-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:13px; }
+    .panel-heading h2 { margin:0; font-size:16px; }
+    .scope { color:var(--muted); font-size:12px; margin-top:4px; }
+    .filters { margin-bottom:12px; }
+    .filter { border-radius:999px; padding:7px 13px; background:#f8fafc; }
+    .filter.active { color:var(--blue); border-color:#c7d2fe; background:#eef2ff; }
+    .domain-group td { padding:0; border-bottom:1px solid #dce4ef; background:#eaf0fa; }
+    .domain-toggle { width:100%; display:flex; align-items:center; gap:10px; padding:12px 14px; border:0; border-radius:0; background:transparent; text-align:right; }
+    .domain-toggle:hover { background:#e2eaf7; }
+    .domain-arrow { display:inline-block; transition:transform .15s ease; color:var(--blue); font-size:14px; }
+    .domain-toggle[aria-expanded="true"] .domain-arrow { transform:rotate(90deg); }
+    .domain-name { direction:ltr; unicode-bidi:plaintext; font-weight:800; }
+    .domain-count { color:var(--muted); font-weight:600; }
+    .domain-summary { margin-inline-start:auto; display:flex; gap:8px; color:var(--muted); font-size:11px; }
+    .request-detail-row td { padding:12px 16px; background:#f8faff; }
+    .request-detail-panel { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .detail-section { min-width:0; padding:10px; border:1px solid var(--line); border-radius:9px; background:#fff; }
+    .detail-section h3 { margin:0 0 8px; font-size:12px; }
+    .detail-meta { margin:0; color:var(--muted); font-size:11px; line-height:1.8; overflow-wrap:anywhere; }
+    .header-list { display:grid; grid-template-columns:minmax(100px,.5fr) minmax(0,1fr); gap:4px 8px; font:11px Consolas,monospace; direction:ltr; text-align:left; }
+    .header-list dt { color:#475569; overflow-wrap:anywhere; }
+    .header-list dd { margin:0; overflow-wrap:anywhere; white-space:pre-wrap; }
+    .detail-empty { color:var(--muted); font-size:11px; }
+    .body-preview { max-height:180px; overflow:auto; padding:8px; border-radius:6px; background:#f1f5f9; white-space:pre-wrap; overflow-wrap:anywhere; direction:ltr; text-align:left; font:11px Consolas,monospace; }
+    .conversation-note { margin:10px 0 12px; padding:9px 11px; border:1px solid #fcd34d; border-radius:8px; background:#fffbeb; color:#78350f; font-size:11px; }
+    .replay-editor { margin-top:12px; padding-top:10px; border-top:1px solid var(--line); }
+    .replay-form { display:grid; grid-template-columns:1fr 150px; gap:8px; margin-top:9px; }
+    .replay-field { display:grid; gap:4px; color:var(--muted); font-size:10px; }
+    .replay-field:first-child,.replay-field:nth-child(3),.replay-field:nth-child(4) { grid-column:1/-1; }
+    .replay-field input,.replay-field select,.replay-field textarea { width:100%; min-width:0; padding:8px; border:1px solid var(--line); border-radius:6px; color:var(--ink); background:#fff; direction:ltr; text-align:left; font:11px Consolas,monospace; }
+    .replay-form button { grid-column:1/-1; justify-self:start; }
+    .replay-note,.replay-confirm { grid-column:1/-1; color:#78350f; font-size:10px; }
+    .replay-confirm { display:flex; align-items:center; gap:6px; color:var(--muted); }
+    .replay-result { margin-top:9px; padding:9px; border:1px solid #a7f3d0; border-radius:8px; background:#f0fdf4; }
+    .replay-result strong { display:block; margin-bottom:7px; font-size:11px; }
+    .replay-error { margin-top:8px; color:var(--red); font-size:11px; }
+    .paused-panel { margin-bottom:16px; border-color:#fbbf24; }
+    .paused-card { margin-top:10px; padding:12px; border:1px solid #fcd34d; border-radius:9px; background:#fffbeb; }
+    .paused-card h3 { margin:0 0 8px; font-size:13px; }
+    .paused-fields { display:grid; grid-template-columns:1fr 150px; gap:8px; }
+    .paused-fields .wide { grid-column:1/-1; }
+    .paused-fields input,.paused-fields textarea,.paused-fields select { width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; direction:ltr; text-align:left; font:11px Consolas,monospace; }
+    .paused-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:9px; }
+    .console-entry { margin-top:8px; padding:9px 11px; border-right:3px solid var(--red); border-radius:7px; background:#fff7f7; }
+    .console-entry.warning { border-right-color:#d97706; background:#fffbeb; }
+    .console-message { direction:ltr; text-align:left; white-space:pre-wrap; overflow-wrap:anywhere; font:12px Consolas,monospace; }
+    .console-source { margin-top:5px; color:var(--muted); direction:ltr; text-align:left; font-size:10px; overflow-wrap:anywhere; }
+    .toolbar { margin-bottom:12px; }
+    .toolbar input { flex:1; min-width:220px; border:1px solid var(--line); border-radius:8px; background:#fbfdff; padding:10px 12px; outline:none; }
+    .toolbar input:focus { border-color:#818cf8; }
+    .network-check { display:flex; gap:8px; margin-bottom:14px; padding:10px; border:1px solid #e0e7ff; border-radius:10px; background:#f8faff; }
+    .network-check input { min-width:220px; flex:1; border:1px solid var(--line); border-radius:7px; padding:9px 10px; }
+    #check-result { align-self:center; color:var(--muted); font-size:12px; }
+    .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:10px; }
+    table { width:100%; min-width:980px; border-collapse:collapse; background:white; }
+    th { position:sticky; top:0; background:#f8fafc; color:var(--muted); font-size:11px; text-align:right; padding:10px; border-bottom:1px solid var(--line); }
+    td { padding:10px; border-bottom:1px solid #edf1f6; vertical-align:middle; font-size:12px; }
+    tr:hover td { background:#fbfdff; }
+    .url-cell { max-width:390px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:Consolas,monospace; direction:ltr; text-align:right; }
+    .domain-cell { font-weight:800; direction:ltr; text-align:right; }
+    .badge { display:inline-block; padding:4px 7px; border-radius:999px; font-size:10px; font-weight:800; white-space:nowrap; }
+    .badge.blocked,.badge.error { color:#b91c1c; background:#fef2f2; }
+    .badge.allowed,.badge.ok { color:#047857; background:#ecfdf5; }
+    .badge.pending { color:#a16207; background:#fffbeb; }
+    .badge.http { font-family:Consolas,monospace; }
+    .muted { color:var(--muted); }
+    .empty { text-align:center; color:var(--muted); padding:50px 15px; }
+    .hint { margin-top:11px; color:var(--muted); font-size:11px; }
+    @media(max-width:900px) { .summary { grid-template-columns:repeat(2,minmax(130px,1fr)); } .head-row { align-items:flex-start; flex-direction:column; } .request-detail-panel { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="head-row">
+      <div>
+        <h1>فاحص الشبكة وروابط الصفحة</h1>
+        <div class="subtitle">راقب الطلبات، راجع أكواد HTTP، وعدّل السماح والحظر مباشرة.</div>
+      </div>
+      <div class="head-actions">
+        <button id="refresh">↻ تحديث السجل</button>
+        <button id="reload-page" class="primary">إعادة تحميل الصفحة الحالية</button>
+        <button id="clear">مسح السجل</button>
+        <button id="toggle-console" type="button">بدء تسجيل Console</button>
+        <button id="clear-console" type="button">مسح أخطاء Console</button>
+        <button id="disable-breakpoints" type="button" disabled>إيقاف نقاط الاعتراض</button>
+      </div>
+    </div>
+  </header>
+  <main>
+    <section class="panel" id="console-panel" hidden>
+      <div class="panel-heading"><div><h2>أخطاء Console للموقع</h2><div class="scope" id="console-scope">التسجيل متوقف.</div></div><strong id="console-count">0</strong></div>
+      <div id="console-list"></div>
+    </section>
+    <section class="panel paused-panel" id="paused-panel" hidden>
+      <div class="panel-heading"><div><h2>طلبات موقوفة لحظيًا</h2><div class="scope">الطلبات هنا متوقفة داخل Chrome حتى تختار تمريرها أو إلغائها. سيتم تمريرها تلقائيًا بعد 90 ثانية.</div></div></div>
+      <div id="paused-list"></div>
+    </section>
+    <section class="summary">
+      <div class="metric"><strong id="total-count">0</strong><span>إجمالي الطلبات</span></div>
+      <div class="metric bad"><strong id="blocked-count">0</strong><span>محظور</span></div>
+      <div class="metric good"><strong id="allowed-count">0</strong><span title="يشمل أخطاء الخادم أو الشبكة">غير محظور</span></div>
+      <div class="metric warn"><strong id="error-count">0</strong><span>أخطاء شبكة أو HTTP</span></div>
+      <div class="metric good"><strong id="ok-count">0</strong><span>استجابات 2xx</span></div>
+    </section>
+    <section class="panel">
+      <div class="panel-heading">
+        <div><h2>طلبات الصفحة الحية</h2><div class="scope" id="scope">جارٍ تحديد الصفحة…</div></div>
+        <div class="muted" id="updated-at">التحديث تلقائي</div>
+      </div>
+      <div class="filters">
+        <button class="filter active" data-filter="all">الكل</button>
+        <button class="filter" data-filter="blocked">محظور</button>
+        <button class="filter" data-filter="allowed" title="كل الطلبات التي لم تمنعها الإضافة، حتى لو فشل الاتصال أو أعاد الخادم خطأ">غير محظور</button>
+        <button class="filter" data-filter="errors">أخطاء</button>
+        <button class="filter" data-filter="thirdParty">طرف ثالث</button>
+        <button id="toggle-groups" type="button">فتح كل النطاقات</button>
+      </div>
+      <div class="conversation-note">التجميع حسب اسم المضيف حرفيًا: مسارات google.com في مجموعة، وgemini.google.com في مجموعة مستقلة. افتح «التفاصيل» لمراجعة Forward وResponse؛ «اعتراض هذا الطلب» يوقف الرابط المطابق لتعديله أو تمريره على هذا التبويب فقط. Chrome سيطلب موافقتك على صلاحية Debugger عند تحديث الإضافة.</div>
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="ابحث في النطاق أو الرابط أو نوع الطلب…">
+      </div>
+      <div class="network-check">
+        <input id="probe-url" type="url" placeholder="أدخل رابطًا لفحص الشبكة وكود HTTP مباشرة">
+        <button id="probe" class="primary">فحص الاتصال</button>
+        <span id="check-result">يفحص HEAD، ويجرّب GET بنطاق بايت واحد إذا لم يدعم الخادم HEAD.</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>الحالة</th><th>HTTP</th><th>النطاق</th><th>الرابط</th><th>النوع</th><th>المدة</th><th>عنوان IP</th><th>الإجراءات</th></tr></thead>
+          <tbody id="requests"><tr><td class="empty" colspan="8">جارٍ رصد طلبات الصفحة… أعد تحميل الصفحة لمشاهدة الطلبات من بدايتها.</td></tr></tbody>
+        </table>
+      </div>
+      <div class="hint">عداد «غير محظور» يشمل كل الطلبات التي لم تمنعها الإضافة، حتى لو أعاد الخادم خطأ HTTP أو فشل الاتصال؛ لذلك قد يتقاطع مع عداد الأخطاء. 2xx تعني استجابة ناجحة. السماح أو الحظر يُطبّق مباشرةً ثم يعيد تحميل الصفحة، وتتحدث اللوحة تلقائيًا.</div>
+    </section>
+  </main>
+  <script src="inspector.js"></script>
+</body>
+</html>

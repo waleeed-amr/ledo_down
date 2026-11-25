@@ -8,6 +8,7 @@
 
     // ChatGPT has no ad surfaces that need this DOM filtering engine.
     if (location.hostname === 'chatgpt.com' || location.hostname.endsWith('.chatgpt.com')) return;
+    if (typeof chrome === 'undefined' || !chrome.runtime?.id || !chrome.storage?.local) return;
 
     // Bail out if adblock is disabled
     let adblockEnabled = true;
@@ -129,7 +130,16 @@
         checkInterval: null,
         skipAttempts: 0,
         lastAdState: false,
+        countedThisAd: false,
+        handledShortAds: new WeakSet(),
         videoStates: new WeakMap(),
+
+        countAdSkipped() {
+            if (this.countedThisAd) return;
+            this.countedThisAd = true;
+            statsThisPage.skipped++;
+            reportStats();
+        },
 
         restoreVideo(video) {
             const previous = this.videoStates.get(video);
@@ -398,7 +408,12 @@
             const activeShort = document.querySelector('ytd-reel-video-renderer[is-active]');
             if (activeShort && (activeShort.hasAttribute('is-ad') || activeShort.querySelector('ytd-ad-slot-renderer, .ytd-ad-slot-renderer'))) {
                 const nextShortBtn = document.querySelector('#navigation-button-down button, ytd-shorts #navigation-button-down');
-                if (nextShortBtn) nextShortBtn.click();
+                if (nextShortBtn && !this.handledShortAds.has(activeShort)) {
+                    this.handledShortAds.add(activeShort);
+                    nextShortBtn.click();
+                    statsThisPage.skipped++;
+                    reportStats();
+                }
             }
 
             // 3. Skip Main Video Ads
@@ -415,6 +430,7 @@
                 if (!this.lastAdState) {
                     this.lastAdState = true;
                     this.skipAttempts = 0;
+                    this.countedThisAd = false;
                 }
 
                 // Zero-Flicker: Immediately make video invisible and mute
@@ -439,15 +455,14 @@
 
                 // Strategy 1: Instant skip button click
                 const skipBtn = player.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-skip-ad-button, [class*="skip-button"], button.ytp-ad-skip-button-slot button, button[id^="skip-button"]');
-                if (skipBtn) {
+                if (skipBtn && !this.countedThisAd) {
                     skipBtn.click();
-                    statsThisPage.skipped++;
-                    reportStats();
+                    this.countAdSkipped();
                     return;
                 }
 
                 // Strategy 2: Fast-forward past duration without triggering countdown UI
-                if (video) {
+                if (video && !this.countedThisAd) {
                     // Do NOT set currentTime = duration because that causes YouTube UI to display "11 of 11"
                     if (video.duration && isFinite(video.duration) && video.duration > 0) {
                         video.currentTime = video.duration + 1;
@@ -458,20 +473,19 @@
                         video.dispatchEvent(new Event('ended'));
                     } catch (_) {}
                     video.playbackRate = 16;
-                    statsThisPage.skipped++;
+                    this.countAdSkipped();
                 }
 
                 // Strategy 3: Multi-language text scan for skip button
                 this.skipAttempts++;
-                if (this.skipAttempts > 2) {
+                if (this.skipAttempts > 2 && !this.countedThisAd) {
                     const allBtns = player.querySelectorAll('button, .ytp-ad-overlay-close-button, [role="button"]');
                     for (const btn of allBtns) {
                         const text = (btn.textContent || '').toLowerCase().trim();
                         if (text.includes('skip') || text.includes('تخطي') || text.includes('passer') ||
                             text.includes('überspringen') || text.includes('saltar') || text.includes('пропустить')) {
                             btn.click();
-                            statsThisPage.skipped++;
-                            reportStats();
+                            this.countAdSkipped();
                             break;
                         }
                     }
@@ -487,6 +501,7 @@
                 if (this.lastAdState) {
                     this.lastAdState = false;
                     this.skipAttempts = 0;
+                    this.countedThisAd = false;
                     // Restore audio, normal playback rate, and visibility
                     const video = player.querySelector('video');
                     if (video) {

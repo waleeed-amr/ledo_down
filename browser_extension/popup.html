@@ -456,8 +456,8 @@
         /* Stats Grid */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 8px;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 6px;
             margin-bottom: 12px;
         }
 
@@ -488,32 +488,6 @@
             letter-spacing: 0.2px;
         }
 
-        .impact-summary {
-            margin-top: 10px;
-            padding: 10px;
-            border: 1px solid #dbeafe;
-            border-radius: var(--radius-md);
-            background: linear-gradient(135deg, #eff6ff, #f5f3ff);
-        }
-        .impact-title { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; }
-        .impact-title strong { font-size:11px; }
-        .impact-tag { padding:3px 6px; border-radius:99px; background:#fff; color:#64748b; font-size:8px; }
-        .impact-metrics { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
-        .impact-metric { padding:8px; border-radius:7px; background:rgba(255,255,255,.8); }
-        .impact-value { display:block; color:#4f46e5; font-size:17px; font-weight:800; line-height:1.2; }
-        .impact-label { color:var(--text-muted); font-size:9px; }
-        .achievement-toggle { width:100%; margin-top:8px; padding:7px 9px; border:1px solid #c7d2fe; border-radius:7px; background:#fff; color:#4338ca; text-align:right; font:inherit; font-size:10px; font-weight:700; cursor:pointer; }
-        .achievement-list { display:grid; gap:6px; margin-top:8px; }
-        .achievement-list[hidden] { display:none; }
-        .achievement-item { display:flex; align-items:center; gap:8px; padding:7px 8px; border-radius:7px; background:rgba(255,255,255,.8); border:1px solid #e2e8f0; }
-        .achievement-item.locked { opacity:.55; }
-        .achievement-icon { font-size:17px; }
-        .achievement-copy { flex:1; min-width:0; }
-        .achievement-copy strong { display:block; font-size:10px; }
-        .achievement-copy small { color:var(--text-muted); font-size:8px; }
-        .achievement-state { color:#059669; font-size:8px; font-weight:700; }
-        .achievement-progress { height:4px; margin-top:4px; overflow:hidden; border-radius:99px; background:#e2e8f0; }
-        .achievement-progress span { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#6366f1,#10b981); }
 
         /* ==================== REQUEST LOGGER INSPECTOR ==================== */
         .logger-container {
@@ -624,7 +598,7 @@
         }
 
         .logger-list {
-            max-height: 230px;
+            max-height: 390px;
             overflow-y: auto;
             border: 1px solid var(--border);
             border-radius: 6px;
@@ -730,7 +704,7 @@
             font-style: italic;
         }
 
-        .req-block-btn {
+        .req-block-btn, .req-protection-btn {
             padding: 2px 6px;
             font-size: 9px;
             font-weight: 600;
@@ -741,10 +715,28 @@
             cursor: pointer;
             transition: all 0.15s;
         }
-        .req-block-btn:hover {
+        .req-block-btn:hover, .req-protection-btn:hover {
             background: var(--danger-light);
             border-color: #fca5a5;
         }
+        .req-protection-btn.allow {
+            color: var(--success);
+            border-color: rgba(16,185,129,.25);
+        }
+        .req-protection-btn.allow:hover {
+            background: var(--success-light);
+            border-color: rgba(16,185,129,.45);
+        }
+        .req-http-badge {
+            padding: 1px 5px;
+            border: 1px solid #bbf7d0;
+            border-radius: 4px;
+            background: #f0fdf4;
+            color: #15803d;
+            font: 700 9px/1.5 monospace;
+        }
+        .req-http-badge.bad { border-color: #fecaca; background: #fef2f2; color: #b91c1c; }
+        .req-http-badge.pending { border-color: #fde68a; background: #fffbeb; color: #b45309; }
 
         .logger-empty-msg {
             padding: 24px 10px;
@@ -1128,17 +1120,9 @@
         .home-protection-link span { display: flex; align-items: center; gap: 7px; }
         .home-protection-link svg { width: 16px; height: 16px; }
         .developer-mode { margin-top: 12px; border: 1px solid #e1e4ee; border-radius: 13px; background: #fff; box-shadow: 0 3px 10px rgba(27,35,59,.04); overflow: hidden; }
-        .developer-mode > summary { min-height: 60px; display: flex; align-items: center; gap: 10px; padding: 10px 12px; color: #414967; cursor: pointer; list-style: none; }
-        .developer-mode > summary::-webkit-details-marker { display: none; }
-        .developer-mode > summary > span:nth-child(2) { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
-        .developer-mode > summary strong { color: #343b55; font-size: 11px; }
-        .developer-mode > summary small { color: #81899c; font-size: 9px; }
-        .developer-mode-icon { width: 34px; height: 34px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 10px; background: #f0f0ff; color: #5b55e8; }
-        .developer-mode-icon svg { width: 19px; height: 19px; }
-        .developer-chevron { width: 17px; height: 17px; color: #8c93a5; transition: transform .18s ease; }
-        .developer-mode[open] > summary { border-bottom: 1px solid #eceef4; background: #fafaff; }
-        .developer-mode[open] .developer-chevron { transform: rotate(180deg); }
+        .developer-mode[hidden], .developer-only[hidden], .tab-pane[hidden], #default-protection-note[hidden] { display: none !important; }
         .developer-content { padding: 10px; background: #f8f9fc; }
+        .developer-panel-heading { margin: 0 0 9px; color: #343b55; font-size: 12px; font-weight: 800; }
         .developer-content > .card:first-of-type { margin-top: 10px; }
         .developer-privacy-link { margin-bottom: 8px; border-color: #dedfff; background: #fff; color: #4e4ac5; }
         .developer-privacy-link:hover { border-color: #b9b8f5; background: #f5f4ff; }
@@ -1206,6 +1190,33 @@
         .subtab-btn.active { border-color: #d1d0ff; background: #f1f0ff; color: #4f49d4; }
         ::-webkit-scrollbar-thumb { background: #c6cada; }
         ::-webkit-scrollbar-thumb:hover { background: #9fa5bb; }
+        /* Compact navigation and notifications stay clear of the page controls. */
+        .tabs { padding: 3px 10px 0; gap: 3px; }
+        .tab-btn { padding: 6px 4px 5px; gap: 3px; font-size: 9px; }
+        .tab-btn svg { width: 16px; height: 16px; }
+        .section-subnav { gap: 5px; padding: 7px 12px 0; }
+        .subtab-btn { padding: 6px 5px; font-size: 10px; }
+        .content { padding: 10px 11px 16px; }
+        .card, .home-site-card, .home-stat, .home-action-card { margin-bottom: 9px; }
+        .toast {
+            top: 8px; bottom: auto; left: 50%; right: auto;
+            width: max-content; max-width: calc(100% - 28px); min-width: 180px;
+            padding: 8px 13px; border: 1px solid rgba(255,255,255,.22);
+            border-radius: 11px; background: rgba(29, 35, 62, .96);
+            box-shadow: 0 8px 24px rgba(16, 20, 42, .28);
+            opacity: 0; pointer-events: none;
+            transform: translate(-50%, -140%);
+        }
+        .toast.show { opacity: 1; transform: translate(-50%, 0); }
+        .toast.error { background: rgba(153, 35, 53, .97); }
+        .developer-tools-card { border: 1px solid #dcdcff; background: linear-gradient(145deg,#fff,#f7f7ff); }
+        .developer-tools-panel { display: grid; gap: 8px; padding-top: 10px; }
+        .developer-mode-button { width: 100%; min-height: 40px; border: 1px solid #c7d2fe; border-radius: 9px; background: #f3f4ff; color: #4f46c5; font-size: 11px; font-weight: 800; cursor: pointer; }
+        .developer-mode-button[aria-pressed="true"] { border-color: #a7f3d0; background: #ecfdf5; color: #047857; }
+        .developer-diagnostic { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 7px 9px; border-radius: 8px; background: #f3f4fa; font-size: 10px; }
+        .developer-diagnostic strong { color: #5558d7; }
+        .developer-tools-actions { display: flex; gap: 7px; }
+        .developer-tools-actions button { flex: 1; }
     </style>
 </head>
 <body>
@@ -1271,9 +1282,9 @@
                 <div class="home-stat"><span class="home-stat-icon rules-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16M4 12h16M4 19h16"/><circle cx="8" cy="5" r="2" fill="white"/><circle cx="15" cy="12" r="2" fill="white"/><circle cx="10" cy="19" r="2" fill="white"/></svg></span><strong id="home-rules-count">0</strong><small>قاعدة حظر نشطة</small></div>
             </section>
 
-            <section class="card" aria-label="LEDO Radio Mode" style="border-color:#ddd6fe;background:linear-gradient(135deg,#faf5ff,#fff);">
+            <section class="card developer-only" id="radio-mode-home-card" hidden aria-label="LEDO Radio Mode" style="border-color:#ddd6fe;background:linear-gradient(135deg,#faf5ff,#fff);">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-                    <div><span class="eyebrow" style="color:#7c3aed;">LEDO RADIO MODE</span><strong style="display:block;margin-top:4px;font-size:14px;">اسمع يوتيوب باستهلاك فيديو أقل</strong><small style="display:block;color:var(--text-muted);margin-top:3px;">الصوت يستمر داخل الصفحة، وتُوقف طلبات مسارات الفيديو لهذا التبويب.</small></div>
+                    <div><span class="eyebrow" style="color:#7c3aed;">LEDO RADIO MODE</span><strong style="display:block;margin-top:4px;font-size:14px;">صوت مستقل مع تحكم كامل</strong><small style="display:block;color:var(--text-muted);margin-top:3px;">تحكم في التشغيل والتقديم والصوت، مع إيقاف مسارات الفيديو في التبويب الحالي.</small></div>
                     <button type="button" id="radio-mode-launch" class="home-protection-chip" style="flex:none;">ابدأ الاستماع</button>
                 </div>
                 <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;text-align:center;">
@@ -1342,13 +1353,13 @@
 
             </div>
 
-            <details class="developer-mode">
-                <summary>
-                    <span class="developer-mode-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 8-4 4 4 4m8-8 4 4-4 4m-3-11-2 14"/></svg></span>
-                    <span><strong>وضع المطور</strong><small>سجل الاتصالات والقوائم والإعدادات المتقدمة</small></span>
-                    <svg class="developer-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m7 10 5 5 5-5"/></svg>
-                </summary>
+            <div class="card" id="default-protection-note" style="margin:10px 0;color:var(--text-muted);font-size:10px;line-height:1.6;">
+                الحماية التلقائية وقوائمها تعمل في الخلفية. الخيارات التفصيلية متاحة من <strong style="color:var(--primary);">الإعدادات ← وضع المطور</strong>.
+            </div>
+
+            <section class="developer-mode developer-only" id="developer-advanced-tools" hidden>
                 <div class="developer-content">
+                    <h3 class="developer-panel-heading">أدوات الحماية المتقدمة</h3>
                     <button type="button" class="tool-action-btn developer-privacy-link" data-open-pane="tab-badger">
                         <span class="tool-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 9 2 5l5 1 5-3 5 3 5-1-2 4 1 6-4 5H7l-4-5z"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/></svg></span>
                         <span>إعدادات حماية الخصوصية والمتتبعات</span>
@@ -1378,11 +1389,19 @@
                 </div>
                 <div class="stat-card">
                     <div class="stat-val green" id="page-allowed-count">0</div>
-                    <div class="stat-lbl">مسموح به</div>
+                    <div class="stat-lbl" title="كل الطلبات التي لم تمنعها الإضافة؛ وتشمل أخطاء الخادم أو الشبكة">غير محظور</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-val amber" id="page-skipped-count">0</div>
-                    <div class="stat-lbl">إعلانات تم تسريعها</div>
+                    <div class="stat-val green" id="page-http-ok-count">0</div>
+                    <div class="stat-lbl">HTTP ناجح 2xx</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-val amber" id="page-http-error-count">0</div>
+                    <div class="stat-lbl">أخطاء HTTP أو شبكة</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-val" id="page-total-count">0</div>
+                    <div class="stat-lbl">إجمالي الطلبات</div>
                 </div>
             </div>
 
@@ -1394,6 +1413,7 @@
                         <span>فاحص روابط الصفحة المباشر</span>
                     </h4>
                     <div class="logger-actions">
+                        <button type="button" class="btn-icon-xs" id="btn-open-network-inspector" title="فتح فاحص الشبكة في صفحة مستقلة">⤢ لوحة كاملة</button>
                         <button type="button" class="btn-icon-xs" id="btn-refresh-logger" title="تحديث القائمة">↻ تحديث</button>
                     <button type="button" class="btn-icon-xs" id="btn-clear-logger" title="مسح السجل"><svg class="icon-inline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></svg>مسح</button>
                     </div>
@@ -1403,8 +1423,9 @@
                 <div class="logger-filters-bar">
                     <button type="button" class="filter-pill active" data-filter="all" id="pill-all">الكل (0)</button>
                     <button type="button" class="filter-pill" data-filter="blocked" id="pill-blocked">محظور (0)</button>
-                    <button type="button" class="filter-pill" data-filter="allowed" id="pill-allowed">مسموح (0)</button>
+                    <button type="button" class="filter-pill" data-filter="allowed" id="pill-allowed" title="كل الطلبات التي لم تمنعها الإضافة، بما فيها أخطاء الخادم أو الشبكة">غير محظور (0)</button>
                     <button type="button" class="filter-pill" data-filter="3p" id="pill-3p">طرف ثالث (0)</button>
+                    <button type="button" class="filter-pill" data-filter="errors" id="pill-errors">أخطاء (0)</button>
                 </div>
 
                 <!-- Search Box -->
@@ -1548,7 +1569,7 @@
                 محرك درع ليدو الذكي · تصفية متقدمة وحماية فائقة للخصوصية
             </div>
                 </div>
-            </details>
+            </section>
         </div>
 
         <!-- ======================================================== -->
@@ -1583,6 +1604,7 @@
                     أرسل رابط الصفحة الحالية مباشرةً إلى تطبيق ليدو. مناسب لفيديوهات يوتيوب وفيسبوك وتيك توك.
                 </p>
                 <input type="text" id="current-url" class="input-field" readonly placeholder="جارٍ جلب رابط الصفحة…">
+                <button type="button" class="btn btn-secondary" id="copy-current-url" style="width:100%; margin:0 0 9px; padding:7px; font-size:10px;">نسخ رابط الصفحة</button>
                 <div style="font-size: 10px; margin-bottom: 6px; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">
                     اختر جودة الفيديو:
                 </div>
@@ -1622,6 +1644,25 @@
         <!-- TAB 5: SETTINGS                                          -->
         <!-- ======================================================== -->
         <div id="tab-settings" class="tab-pane">
+            <section class="card developer-tools-card" aria-label="وضع المطور">
+                <div class="module-meta" style="margin-bottom:8px;">
+                    <h5>وضع المطور</h5>
+                    <p>يُظهر إعدادات الحماية التفصيلية وفاحص الشبكة وأدوات التشخيص. لا يغيّر إعدادات الحماية الحالية.</p>
+                </div>
+                <button type="button" class="developer-mode-button" id="developer-mode-toggle" aria-pressed="false">تفعيل وضع المطور</button>
+                <div id="developer-mode-state" style="font-size:9px;color:var(--text-muted);margin-top:6px;">إعدادات الحماية التلقائية تعمل في الخلفية.</div>
+                <div class="developer-tools-panel" id="developer-tools-panel" hidden>
+                    <div class="developer-diagnostic"><span>نسخة الإضافة</span><strong id="developer-version">—</strong></div>
+                    <div class="developer-diagnostic"><span>تطبيق ليدو</span><strong id="developer-connection">جارٍ التحقق…</strong></div>
+                    <div class="developer-diagnostic"><span>آخر فحص</span><strong id="developer-last-check">—</strong></div>
+                    <div class="developer-tools-actions">
+                        <button type="button" class="btn btn-secondary" id="developer-check-btn">فحص الاتصال</button>
+                        <button type="button" class="btn btn-secondary" id="developer-copy-btn">نسخ تقرير آمن</button>
+                    </div>
+                    <small style="color:var(--text-muted);font-size:9px;line-height:1.5;">التقرير لا يتضمن الروابط أو ملفات الارتباط أو بيانات التصفح.</small>
+                </div>
+            </section>
+
             <!-- Session Stats -->
             <div class="card" id="adblock-session-card" style="background: #ffffff; border-color: #e5eaf2;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -1634,45 +1675,24 @@
                     </div>
                     <div style="text-align:right;">
                         <div style="font-size:18px; font-weight:800; color:var(--success);" id="session-blocked-count">0</div>
-                        <div style="font-size:9px; color:var(--text-muted);">إجمالي المحظور</div>
+                        <div style="font-size:9px; color:var(--text-muted);" title="تراكم إخفاء عناصر الصفحة وإزالتها، وليس عدد طلبات الشبكة المحظورة">عناصر صفحة أخفاها ليدو</div>
                     </div>
                 </div>
                 <div style="display:flex; gap:8px; margin-top:10px;">
                     <div style="flex:1; text-align:center; padding:6px; background:#ffffff; border-radius:6px; border:1px solid rgba(0,0,0,0.05);">
-                        <div style="font-size:13px; font-weight:700; color:var(--warning);" id="session-skipped-count">0</div>
-                        <div style="font-size:9px; color:var(--text-muted);">إعلانات فيديو تم تجاوزها</div>
+                        <div style="font-size:13px; font-weight:700; color:var(--warning);" id="session-skipped-count" title="عدد مرات محاولة تخطي إعلان YouTube؛ محاولة واحدة لكل إعلان في الصفحة. العداد الدقيق يبدأ من هذا الإصدار.">0</div>
+                        <div style="font-size:9px; color:var(--text-muted);">محاولات تخطي إعلانات YouTube (تراكمي)</div>
                     </div>
                     <div style="flex:1; text-align:center; padding:6px; background:#ffffff; border-radius:6px; border:1px solid rgba(0,0,0,0.05);">
                         <div style="font-size:13px; font-weight:700; color:var(--primary);" id="session-filters-count">0</div>
                         <div style="font-size:9px; color:var(--text-muted);">قواعد نشطة</div>
                     </div>
                 </div>
-                <section class="impact-summary" aria-label="الأثر والإنجازات">
-                    <div class="impact-title">
-                        <strong>أثرك مع ليدو</strong>
-                        <span class="impact-tag" title="القيم تقديرية وليست قياسًا مباشرًا لحركة الشبكة">تقديري</span>
-                    </div>
-                    <div class="impact-metrics">
-                        <div class="impact-metric">
-                            <strong class="impact-value" id="estimated-data-saved">0 MB</strong>
-                            <span class="impact-label">بيانات إعلانية مقدّر توفيرها</span>
-                        </div>
-                        <div class="impact-metric">
-                            <strong class="impact-value" id="estimated-time-saved">0 ث</strong>
-                            <span class="impact-label">وقت مقدّر من تخطي الفيديو</span>
-                        </div>
-                    </div>
-                    <button type="button" class="achievement-toggle" id="achievement-toggle" aria-expanded="false" aria-controls="achievement-list">🏆 عرض الإنجازات</button>
-                    <div class="achievement-list" id="achievement-list" hidden></div>
-                    <div style="margin-top:7px;color:var(--text-muted);font-size:8px;line-height:1.5;">
-                        التقدير يستخدم متوسط 250 كيلوبايت لكل عنصر محظور و15 ثانية لكل إعلان فيديو تم تخطيه.
-                    </div>
-                </section>
             </div>
 
             <!-- Interception & Floating Settings -->
             <div class="card">
-                <div class="module-row">
+                <div class="module-row developer-only" hidden>
                     <div class="module-meta">
                         <h5>زر التنزيل العائم</h5>
                         <p>إظهار زر التنزيل عند المرور فوق الفيديو</p>
@@ -1705,7 +1725,7 @@
         <!-- ======================================================== -->
         <!-- TAB 6: PRIVACY BADGER (EFF Tracker Learning)             -->
         <!-- ======================================================== -->
-        <div id="tab-badger" class="tab-pane">
+        <div id="tab-badger" class="tab-pane developer-only" hidden>
 
             <button type="button" class="btn-icon-xs developer-back-btn" data-open-pane="tab-adblock" aria-label="العودة إلى إعدادات الحماية">← رجوع إلى الحماية</button>
 
@@ -1852,7 +1872,7 @@
     </div>
 
     <!-- Notification Toast -->
-    <div id="toast" class="toast">تم تنفيذ الإجراء</div>
+    <div id="toast" class="toast" role="status" aria-live="polite">تم تنفيذ الإجراء</div>
 
     <script src="popup.js"></script>
 </body>

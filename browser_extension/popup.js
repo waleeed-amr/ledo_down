@@ -7,6 +7,7 @@ const tabBtns = document.querySelectorAll('.tab-btn');
 const tabPanes = document.querySelectorAll('.tab-pane');
 const currentUrlInput = document.getElementById('current-url');
 const toastEl = document.getElementById('toast');
+let toastTimer = null;
 
 // State
 let isAppOnline = false;
@@ -18,6 +19,15 @@ let adBlockEnabled = true;
 let allowedSites = [];
 let currentFilteringMode = 2;
 let foundMediaItems = [];
+let appCheckInFlight = null;
+let appFailureCount = 0;
+let nextAppCheckAt = 0;
+let lastDownloadRefreshAt = 0;
+let lastAppCheckAt = null;
+let lastAppCheckError = '';
+let popupUiUserInteracted = false;
+let popupScrollSaveTimer = null;
+const popupStateStorage = chrome.storage.session || chrome.storage.local;
 
 const FILTERING_MODES = {
     0: {
@@ -51,34 +61,44 @@ let activeLoggerFilter = 'all';
 let loggerSearchQuery = '';
 let tabRequestsData = [];
 let tabRequestsStats = { total: 0, blocked: 0, allowed: 0, thirdParty: 0, blockedPercent: 0 };
+let networkAllowedDomains = new Set();
 let loggerPollInterval = null;
+let developerModeEnabled = false;
+let tabRequestRefreshSequence = 0;
 
 // --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
     setupTabs();
+    setupPopupStatePersistence();
+    restorePopupUiState();
     initCurrentTab();
     checkAppStatus();
     setupSettings();
     setupBadgerTab();
     
     // Poll desktop status every 3 seconds
-    setInterval(checkAppStatus, 3000);
+    setInterval(() => checkAppStatus(), 4000);
 });
 
 // --- Tab Logic ---
 function setupTabs() {
     tabBtns.forEach(btn => {
         btn.addEventListener('click', () => {
+            popupUiUserInteracted = true;
             setActiveSection(btn.dataset.section);
         });
     });
 
     document.querySelectorAll('.subtab-btn').forEach(btn => {
-        btn.addEventListener('click', () => activatePane(btn.dataset.pane));
+        btn.addEventListener('click', () => {
+            popupUiUserInteracted = true;
+            activatePane(btn.dataset.pane);
+        });
     });
 
     document.querySelectorAll('[data-open-pane]').forEach(btn => {
         btn.addEventListener('click', () => {
+            popupUiUserInteracted = true;
             const target = btn.dataset.openPane;
             const section = ['tab-adblock', 'tab-badger'].includes(target) ? 'protection'
                 : ['tab-smart', 'tab-current', 'tab-status'].includes(target) ? 'downloads' : 'home';
@@ -95,9 +115,11 @@ function setActiveSection(section, requestedPane = '') {
     document.getElementById('protection-subnav').hidden = section !== 'protection';
     document.getElementById('downloads-subnav').hidden = section !== 'downloads';
     activatePane(requestedPane || defaults[section] || 'tab-home');
+    savePopupUiState();
 }
 
 function activatePane(target) {
+    if (target === 'tab-badger' && !developerModeEnabled) target = 'tab-adblock';
     tabPanes.forEach(pane => pane.classList.toggle('active', pane.id === target));
     document.querySelectorAll('.subtab-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.pane === target));
     if (target === 'tab-smart') sniffMedia(currentTabId);
@@ -109,6 +131,50 @@ function activatePane(target) {
         clearInterval(badgerPollInterval);
         badgerPollInterval = null;
     }
+    savePopupUiState();
+}
+
+function setupPopupStatePersistence() {
+    const content = document.querySelector('.content');
+    if (content) {
+        content.addEventListener('scroll', () => {
+            popupUiUserInteracted = true;
+            clearTimeout(popupScrollSaveTimer);
+            popupScrollSaveTimer = setTimeout(savePopupUiState, 140);
+        }, { passive: true });
+    }
+}
+
+function savePopupUiState() {
+    if (!popupStateStorage) return;
+    const activePane = document.querySelector('.tab-pane.active');
+    const activeSection = document.querySelector('.tab-btn.active')?.dataset.section || 'home';
+    const content = document.querySelector('.content');
+    popupStateStorage.set({
+        ledo_popup_ui_state: {
+            section: activeSection,
+            pane: activePane?.id || 'tab-home',
+            scrollTop: content?.scrollTop || 0
+        }
+    });
+}
+
+function restorePopupUiState() {
+    if (!popupStateStorage) return;
+    popupStateStorage.get(['ledo_popup_ui_state'], result => {
+        if (popupUiUserInteracted) return;
+        const state = result?.ledo_popup_ui_state;
+        if (!state || !['home', 'protection', 'downloads', 'settings'].includes(state.section)) return;
+
+        const paneExists = state.pane && document.getElementById(state.pane);
+        const safePane = state.pane === 'tab-badger' && !developerModeEnabled ? '' : state.pane;
+        setActiveSection(state.section, paneExists ? safePane : '');
+        requestAnimationFrame(() => {
+            if (popupUiUserInteracted) return;
+            const content = document.querySelector('.content');
+            if (content) content.scrollTop = Math.max(0, Number(state.scrollTop) || 0);
+        });
+    });
 }
 
 // --- Active Tab Initializer ---
@@ -480,6 +546,7 @@ function updateAdBlockHeroUI() {
 // --- Live Request Logger & Inspector ---
 async function refreshTabRequests() {
     if (!currentTabId || currentTabId <= 0) return;
+    const sequence = ++tabRequestRefreshSequence;
 
     try {
         const response = await sendExtensionAction({
@@ -487,9 +554,13 @@ async function refreshTabRequests() {
             tabId: currentTabId
         });
 
+        if (sequence !== tabRequestRefreshSequence) return;
         if (response && response.success) {
             tabRequestsData = response.requests || [];
             tabRequestsStats = response.stats || { total: 0, blocked: 0, allowed: 0, thirdParty: 0 };
+            const allowState = await chrome.storage.local.get('adblock_network_allowlist').catch(() => ({}));
+            if (sequence !== tabRequestRefreshSequence) return;
+            networkAllowedDomains = new Set((Array.isArray(allowState.adblock_network_allowlist) ? allowState.adblock_network_allowlist : []).map(domain => String(domain).toLowerCase()));
 
             const homeBlocked = document.getElementById('home-blocked-count');
             if (homeBlocked) homeBlocked.textContent = formatCount(tabRequestsStats.blocked);
@@ -497,27 +568,28 @@ async function refreshTabRequests() {
             // Update stats grid
             const blockedVal = document.getElementById('page-blocked-count');
             const allowedVal = document.getElementById('page-allowed-count');
-            const skippedVal = document.getElementById('page-skipped-count');
+            const httpOkVal = document.getElementById('page-http-ok-count');
+            const httpErrorVal = document.getElementById('page-http-error-count');
+            const totalVal = document.getElementById('page-total-count');
 
             if (blockedVal) blockedVal.textContent = formatCount(tabRequestsStats.blocked);
             if (allowedVal) allowedVal.textContent = formatCount(tabRequestsStats.allowed);
-
-            // Fetch video ads skipped count from session
-            chrome.storage.local.get(['adblock_session_stats'], (data) => {
-                const s = data.adblock_session_stats || {};
-                if (skippedVal) skippedVal.textContent = formatCount(s.totalSkipped || 0);
-            });
+            if (httpOkVal) httpOkVal.textContent = formatCount(tabRequestsStats.successful || 0);
+            if (httpErrorVal) httpErrorVal.textContent = formatCount(tabRequestsStats.errors || 0);
+            if (totalVal) totalVal.textContent = formatCount(tabRequestsStats.total);
 
             // Update filter pill counts
             const pillAll = document.getElementById('pill-all');
             const pillBlocked = document.getElementById('pill-blocked');
             const pillAllowed = document.getElementById('pill-allowed');
             const pill3p = document.getElementById('pill-3p');
+            const pillErrors = document.getElementById('pill-errors');
 
             if (pillAll) pillAll.textContent = `الكل (${formatCount(tabRequestsStats.total)})`;
             if (pillBlocked) pillBlocked.textContent = `محظور (${formatCount(tabRequestsStats.blocked)})`;
-            if (pillAllowed) pillAllowed.textContent = `مسموح (${formatCount(tabRequestsStats.allowed)})`;
+            if (pillAllowed) pillAllowed.textContent = `غير محظور (${formatCount(tabRequestsStats.allowed)})`;
             if (pill3p) pill3p.textContent = `طرف ثالث (${formatCount(tabRequestsStats.thirdParty)})`;
+            if (pillErrors) pillErrors.textContent = `أخطاء (${formatCount(tabRequestsStats.errors || 0)})`;
 
             renderRequestLogger();
         }
@@ -525,6 +597,18 @@ async function refreshTabRequests() {
         // Tab might not be accessible
     }
 }
+
+chrome.runtime.onMessage.addListener(message => {
+    if (message?.action === 'tabRequestsUpdated' && message.tabId === currentTabId) {
+        refreshTabRequests();
+    }
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local' || !changes.adblock_network_allowlist) return;
+    networkAllowedDomains = new Set((Array.isArray(changes.adblock_network_allowlist.newValue) ? changes.adblock_network_allowlist.newValue : []).map(domain => String(domain).toLowerCase()));
+    renderRequestLogger();
+});
 
 function setupLoggerFiltersAndSearch() {
     // Filter Pills
@@ -567,26 +651,44 @@ function setupLoggerFiltersAndSearch() {
         });
     }
 
+    const openInspectorBtn = document.getElementById('btn-open-network-inspector');
+    if (openInspectorBtn) {
+        openInspectorBtn.addEventListener('click', () => {
+            if (!currentTabId || currentTabId <= 0) return;
+            const url = `${chrome.runtime.getURL('inspector.html')}?tabId=${encodeURIComponent(currentTabId)}`;
+            chrome.tabs.create({ url });
+        });
+    }
+
     // Block Domain click inside logger
     const listEl = document.getElementById('logger-request-list');
     if (listEl) {
         listEl.addEventListener('click', async (e) => {
-            const blockBtn = e.target.closest('[data-block-domain]');
-            if (!blockBtn) return;
-            const domain = blockBtn.dataset.blockDomain;
+            const protectionBtn = e.target.closest('[data-network-mode]');
+            if (!protectionBtn) return;
+            const domain = protectionBtn.dataset.domain;
             if (!domain) return;
-            blockBtn.disabled = true;
-            blockBtn.textContent = 'جارٍ الحظر…';
+            const mode = protectionBtn.dataset.networkMode;
+            protectionBtn.disabled = true;
+            protectionBtn.textContent = mode === 'allow' ? 'جارٍ السماح…' : 'جارٍ الحظر…';
             try {
-                const res = await sendExtensionAction({ action: 'blockDomainFromLogger', domain });
-                if (!res.success) throw new Error(res.error || 'تعذر حظر النطاق');
-                renderCustomDomains(res.domains);
-                showToast(`تم حظر النطاق: ${domain}`);
+                const res = await sendExtensionAction({
+                    action: 'setLoggerDomainProtection',
+                    domain,
+                    mode,
+                    reloadTabId: mode === 'block' ? currentTabId : undefined
+                });
+                if (!res.success) throw new Error(res.error || 'تعذر تحديث قاعدة النطاق');
+                if (mode === 'allow') networkAllowedDomains.add(String(domain).toLowerCase());
+                else networkAllowedDomains.delete(String(domain).toLowerCase());
+                renderCustomDomains(res.domains || []);
+                showToast(mode === 'allow' ? `تم حفظ السماح لـ ${domain} بدون إعادة تحميل الصفحة` : `تم حظر اتصالات ${domain} وإعادة تحميل الصفحة`);
                 refreshTabRequests();
             } catch (err) {
-                showToast(err.message || 'حدث خطأ أثناء حظر النطاق', true);
-                blockBtn.disabled = false;
-                blockBtn.textContent = '+ حظر';
+                showToast(err.message || 'حدث خطأ أثناء تعديل النطاق', true);
+                protectionBtn.disabled = false;
+                const stillAllowed = networkAllowedDomains.has(String(domain).toLowerCase());
+                protectionBtn.textContent = stillAllowed ? 'إلغاء السماح' : (mode === 'allow' ? 'اسمح' : 'احظر + حدّث');
             }
         });
     }
@@ -602,9 +704,11 @@ function renderRequestLogger() {
     if (activeLoggerFilter === 'blocked') {
         filtered = filtered.filter(r => r.status === 'blocked');
     } else if (activeLoggerFilter === 'allowed') {
-        filtered = filtered.filter(r => r.status === 'allowed');
+        filtered = filtered.filter(r => r.status !== 'blocked');
     } else if (activeLoggerFilter === '3p') {
         filtered = filtered.filter(r => r.isThirdParty);
+    } else if (activeLoggerFilter === 'errors') {
+        filtered = filtered.filter(r => r.status === 'error' || Number(r.httpStatus) >= 400);
     }
 
     // 2. Filter by search query
@@ -634,9 +738,15 @@ function renderRequestLogger() {
         const row = document.createElement('div');
         row.className = 'req-row';
 
-        const isBlocked = req.status === 'blocked';
-        const statusBadgeClass = isBlocked ? 'blocked' : 'allowed';
-        const statusLabel = isBlocked ? 'محظور' : 'مسموح';
+        const isAllowlisted = networkAllowedDomains.has(String(req.domain || '').toLowerCase());
+        const isBlocked = req.status === 'blocked' && !isAllowlisted;
+        const protectionMode = isAllowlisted || !isBlocked ? 'block' : 'allow';
+        const isError = req.status === 'error' || Number(req.httpStatus) >= 400;
+        const statusBadgeClass = isBlocked ? 'blocked' : (isError ? 'blocked' : 'allowed');
+        const statusLabel = isBlocked ? 'محظور' : (req.status === 'error' ? 'فشل الاتصال' : (isError ? 'HTTP خطأ' : 'مسموح'));
+        const httpCode = Number(req.httpStatus) || 0;
+        const httpLabel = httpCode ? `HTTP ${httpCode}${httpCode === 200 ? ' OK' : ''}` :
+            (req.networkState === 'pending' ? 'قيد الاتصال' : '');
 
         let pathDisplay = '';
         try {
@@ -650,17 +760,18 @@ function renderRequestLogger() {
             <div class="req-top-line">
                 <div class="req-badges">
                     <span class="req-status-badge ${statusBadgeClass}">${statusLabel}</span>
+                    ${httpLabel ? `<span class="req-http-badge ${httpCode >= 400 || isError ? 'bad' : (httpCode ? '' : 'pending')}">${escapeHtml(httpLabel)}</span>` : ''}
                     <span class="req-type-badge">${escapeHtml(translateRequestType(req.type))}</span>
                     ${req.isThirdParty ? '<span class="req-3p-badge">طرف ثالث</span>' : ''}
                 </div>
-                ${!isBlocked && req.isThirdParty && req.domain ? `
-                    <button type="button" class="req-block-btn" data-block-domain="${escapeHtml(req.domain)}" title="حظر النطاق ${escapeHtml(req.domain)}">+ حظر النطاق</button>
+                ${req.domain && req.domain !== 'unknown' ? `
+                    <button type="button" class="req-protection-btn ${(isBlocked || isAllowlisted) ? 'allow' : ''}" data-network-mode="${protectionMode}" data-domain="${escapeHtml(req.domain)}" title="${isAllowlisted ? 'إلغاء استثناء السماح وإعادة الحظر' : (isBlocked ? 'حفظ السماح لهذا النطاق بدون إعادة تحميل الصفحة' : 'حظر هذا النطاق ثم إعادة تحميل الصفحة')}">${isAllowlisted ? 'إلغاء السماح' : (isBlocked ? 'اسمح' : 'احظر + حدّث')}</button>
                 ` : ''}
             </div>
             <div class="req-domain" title="${escapeHtml(req.url)}">${escapeHtml(req.domain || 'غير معروف')}</div>
             <div class="req-url-snippet" title="${escapeHtml(req.url)}">${escapeHtml(pathDisplay)}</div>
             <div class="req-bottom-line">
-                <span class="req-reason">${escapeHtml(req.reason === 'Ledo Shield Engine' ? 'محرك درع ليدو' : (req.reason || (isBlocked ? 'قواعد درع ليدو' : 'طلب مسموح به')))}</span>
+                <span class="req-reason">${escapeHtml(req.networkError || (req.fromCache ? 'استجابة من الذاكرة المؤقتة' : req.reason === 'Ledo Shield Engine' ? 'محرك درع ليدو' : (req.reason || (isBlocked ? 'قواعد درع ليدو' : 'طلب مسموح به'))))}</span>
                 <span>${escapeHtml(req.method || 'GET')}</span>
             </div>
         `;
@@ -877,58 +988,12 @@ function renderCustomDomains(domains) {
 function loadLifetimeStats(settings) {
     const stats = settings.adblock_session_stats || { totalBlocked: 0, totalSkipped: 0 };
     const totalBlocked = Math.max(0, Number(stats.totalBlocked) || 0);
-    const totalSkipped = Math.max(0, Number(stats.totalSkipped) || 0);
+    const totalSkipped = Math.max(0, Number(stats.totalSkippedAccurate) || 0);
     const blockedEl = document.getElementById('session-blocked-count');
     const skippedEl = document.getElementById('session-skipped-count');
     if (blockedEl) blockedEl.textContent = formatCount(totalBlocked);
     if (skippedEl) skippedEl.textContent = formatCount(totalSkipped);
-
-    // Estimates are intentionally disclosed in the UI; the extension does not
-    // receive byte-size metadata for requests blocked before download.
-    const dataSavedEl = document.getElementById('estimated-data-saved');
-    const timeSavedEl = document.getElementById('estimated-time-saved');
-    if (dataSavedEl) {
-        const estimatedMb = totalBlocked * 0.25;
-        dataSavedEl.textContent = `${estimatedMb < 10 ? estimatedMb.toFixed(2) : Math.round(estimatedMb).toLocaleString()} MB`;
-    }
-    if (timeSavedEl) {
-        const seconds = totalSkipped * 15;
-        if (seconds < 60) timeSavedEl.textContent = `${formatCount(seconds)} ث`;
-        else if (seconds < 3600) timeSavedEl.textContent = `${Math.floor(seconds / 60)} د ${seconds % 60} ث`;
-        else timeSavedEl.textContent = `${Math.floor(seconds / 3600)} س ${Math.floor((seconds % 3600) / 60)} د`;
-    }
-
-    const achievementList = document.getElementById('achievement-list');
-    if (achievementList) {
-        const achievements = [
-            { icon: '🛡️', name: 'بداية الحماية', detail: 'حظر 10 عناصر', value: totalBlocked, target: 10 },
-            { icon: '🎯', name: 'صائد الإعلانات', detail: 'حظر 100 عنصر', value: totalBlocked, target: 100 },
-            { icon: '🏅', name: 'درع ليدو', detail: 'حظر 1,000 عنصر', value: totalBlocked, target: 1000 },
-            { icon: '⏭️', name: 'أول تخطٍ', detail: 'تجاوز إعلان فيديو', value: totalSkipped, target: 1 },
-            { icon: '🚀', name: 'قاهر الإعلانات', detail: 'تجاوز 25 إعلان فيديو', value: totalSkipped, target: 25 }
-        ];
-        achievementList.innerHTML = achievements.map(item => {
-            const progress = Math.min(100, (item.value / item.target) * 100);
-            const earned = item.value >= item.target;
-            return `<div class="achievement-item${earned ? '' : ' locked'}">
-                <span class="achievement-icon" aria-hidden="true">${item.icon}</span>
-                <div class="achievement-copy"><strong>${item.name}</strong><small>${item.detail} · ${formatCount(Math.min(item.value, item.target))}/${formatCount(item.target)}</small>
-                    <div class="achievement-progress" aria-label="التقدم ${Math.round(progress)} بالمئة"><span style="width:${progress}%"></span></div>
-                </div>
-                <span class="achievement-state">${earned ? 'مكتمل ✓' : 'قيد التقدم'}</span>
-            </div>`;
-        }).join('');
-    }
 }
-
-document.getElementById('achievement-toggle')?.addEventListener('click', (event) => {
-    const button = event.currentTarget;
-    const list = document.getElementById('achievement-list');
-    const expanded = button.getAttribute('aria-expanded') === 'true';
-    button.setAttribute('aria-expanded', String(!expanded));
-    list.hidden = expanded;
-    button.textContent = expanded ? '🏆 عرض الإنجازات' : '🏆 إخفاء الإنجازات';
-});
 
 chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local' && changes.adblock_session_stats) {
@@ -953,17 +1018,39 @@ function sendExtensionAction(payload) {
 //  DOWNLOADER APP INTEGRATION & MEDIA SNIFFER
 // ========================================================================
 async function checkAppStatus() {
-    try {
-        const response = await fetch(`${API_BASE}/health`, { method: 'GET', mode: 'cors' });
-        if (response.ok) {
+    const now = Date.now();
+    if (appCheckInFlight) return appCheckInFlight;
+    if (now < nextAppCheckAt) return;
+
+    appCheckInFlight = (async () => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
+        try {
+            const response = await fetch(`${API_BASE}/health`, { method: 'GET', mode: 'cors', signal: controller.signal });
+            lastAppCheckAt = Date.now();
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const wasOnline = isAppOnline;
+            appFailureCount = 0;
+            lastAppCheckError = '';
+            nextAppCheckAt = Date.now() + 12000;
             setAppOnline(true);
-            fetchActiveDownloads();
-        } else {
+            if (!wasOnline || Date.now() - lastDownloadRefreshAt >= 15000) {
+                lastDownloadRefreshAt = Date.now();
+                fetchActiveDownloads();
+            }
+        } catch (error) {
+            lastAppCheckAt = Date.now();
+            lastAppCheckError = error?.name === 'AbortError' ? 'انتهت مهلة الاتصال' : (error?.message || 'تعذر الاتصال');
+            appFailureCount += 1;
+            nextAppCheckAt = Date.now() + Math.min(30000, 3000 * (2 ** Math.min(appFailureCount - 1, 3)));
             setAppOnline(false);
+        } finally {
+            clearTimeout(timeoutId);
+            appCheckInFlight = null;
+            updateDeveloperDiagnostics();
         }
-    } catch (_) {
-        setAppOnline(false);
-    }
+    })();
+    return appCheckInFlight;
 }
 
 function setAppOnline(online) {
@@ -980,6 +1067,7 @@ function setAppOnline(online) {
         document.getElementById('status-offline').style.display = 'flex';
         document.getElementById('status-stats').style.display = 'none';
     }
+    updateDeveloperDiagnostics();
 }
 
 async function fetchActiveDownloads() {
@@ -1105,11 +1193,13 @@ document.getElementById('active-list')?.addEventListener('click', async event =>
 // --- Toast Feedback ---
 function showToast(message, isError = false) {
     if (!toastEl) return;
+    if (toastTimer) clearTimeout(toastTimer);
     toastEl.innerText = message;
     toastEl.classList.toggle('error', isError);
     toastEl.classList.add('show');
-    setTimeout(() => {
+    toastTimer = setTimeout(() => {
         toastEl.classList.remove('show');
+        toastTimer = null;
     }, 2800);
 }
 
@@ -1119,10 +1209,15 @@ function cleanUrl(url) {
         const urlObj = new URL(url);
         if (urlObj.hostname.includes('youtube.com') && urlObj.pathname === '/watch') {
             const videoId = urlObj.searchParams.get('v');
-            if (videoId) return `https://www.youtube.com/watch?v=${videoId}`;
+            if (videoId) {
+                const normalized = new URLSearchParams({ v: videoId });
+                const playlistId = urlObj.searchParams.get('list');
+                if (playlistId) normalized.set('list', playlistId);
+                return `https://www.youtube.com/watch?${normalized.toString()}`;
+            }
         }
-        if (urlObj.hostname.includes('facebook.com') && (urlObj.pathname.includes('/watch') || urlObj.pathname.includes('/videos/'))) {
-            return `${urlObj.origin}${urlObj.pathname}`;
+        if (urlObj.hostname.includes('facebook.com') && (urlObj.pathname.includes('/watch') || urlObj.pathname.includes('/videos/') || urlObj.pathname.includes('/reel/'))) {
+            return `${urlObj.origin}${urlObj.pathname}${urlObj.search}`;
         }
         if (urlObj.hostname.includes('tiktok.com') && urlObj.pathname.includes('/video/')) {
             return `${urlObj.origin}${urlObj.pathname}`;
@@ -1131,12 +1226,22 @@ function cleanUrl(url) {
     return url;
 }
 
-async function sendToDesktop(rawUrl, quality = 'best', isYtDlp = true, quiet = false) {
+async function sendToDesktop(rawUrl, quality = 'best', isYtDlp = true, quiet = false, title = currentTabTitle) {
     if (!isAppOnline) {
         showToast("تعذر الاتصال بتطبيق ليدو", true);
         return false;
     }
-    const url = cleanUrl(rawUrl);
+    // Social player sources are often opaque CDN URLs. Their page URL retains
+    // the post metadata (including the actual caption/title).
+    const socialVideoPage = /(^|\.)facebook\.com$|(^|\.)fb\.watch$|(^|\.)tiktok\.com$|(^|\.)instagram\.com$|(^|\.)vimeo\.com$|(^|\.)x\.com$|(^|\.)twitter\.com$/i;
+    let sourceUrl = rawUrl;
+    try {
+        const page = new URL(currentTabUrl);
+        if (isYtDlp && socialVideoPage.test(page.hostname) && /\/reel\/|\/watch|\/videos?\/|\/video\/|\/p\/|\/status\//i.test(page.pathname)) {
+            sourceUrl = currentTabUrl;
+        }
+    } catch (_) {}
+    const url = cleanUrl(sourceUrl);
     try {
         const response = await new Promise((resolve, reject) => {
             chrome.runtime.sendMessage({
@@ -1144,6 +1249,7 @@ async function sendToDesktop(rawUrl, quality = 'best', isYtDlp = true, quiet = f
                 url,
                 quality,
                 is_yt_dlp: isYtDlp,
+                title,
                 referer: currentTabUrl
             }, res => {
                 if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
@@ -1160,6 +1266,16 @@ async function sendToDesktop(rawUrl, quality = 'best', isYtDlp = true, quiet = f
 }
 
 // Quality Pickers on Current Tab
+document.getElementById('copy-current-url')?.addEventListener('click', async () => {
+    if (!currentTabUrl) return showToast('رابط الصفحة غير جاهز بعد', true);
+    try {
+        await navigator.clipboard.writeText(currentTabUrl);
+        showToast('تم نسخ رابط الصفحة');
+    } catch (_) {
+        showToast('تعذر نسخ الرابط من المتصفح', true);
+    }
+});
+
 document.querySelectorAll('.current-quality-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
         if (!currentTabUrl || btn.disabled) return;
@@ -1246,7 +1362,7 @@ document.getElementById('btn-download-all')?.addEventListener('click', async (e)
     let sentCount = 0;
     for (const item of foundMediaItems) {
         const directFile = item.type === 'file';
-        if (await sendToDesktop(item.url, 'best', !directFile, true)) sentCount += 1;
+        if (await sendToDesktop(item.url, 'best', !directFile, true, item.title)) sentCount += 1;
         await new Promise(r => setTimeout(r, 150));
     }
     showToast(`تمت إضافة ${sentCount} من أصل ${foundMediaItems.length} وسائط إلى قائمة التنزيل`);
@@ -1290,14 +1406,53 @@ function detectMediaOnPage(pageUrl = '') {
         } catch (_) {}
     });
 
-    // Stream players (including YouTube) commonly expose only a blob: currentSrc.
-    // Ask yt-dlp to resolve the page URL instead of trying to download that blob.
+    // Resolve the player back to its nearest share/detail link. This works for
+    // feed cards on different sites, including players whose src is only blob:.
     try {
         const page = new URL(pageUrl || location.href);
-        const host = page.hostname.toLowerCase();
-        const supportedPage = /(^|\.)youtube\.com$|(^|\.)youtu\.be$|(^|\.)youtube-nocookie\.com$|(^|\.)facebook\.com$|(^|\.)fb\.watch$|(^|\.)tiktok\.com$|(^|\.)vimeo\.com$|(^|\.)instagram\.com$|(^|\.)x\.com$|(^|\.)twitter\.com$/.test(host);
-        if (supportedPage && (document.querySelector('video, ytd-player, #movie_player, [data-testid="video-player"]') || /youtube|youtu\.be|fb\.watch|tiktok|vimeo|instagram|\/watch|\/videos?\//i.test(page.href))) {
-            list.unshift({ url: page.href, type: 'video', title: document.title || 'فيديو من الصفحة', isPage: true });
+        const player = document.querySelector('video, audio, ytd-player, #movie_player, [data-testid="video-player"]');
+        if (player) {
+            const videoPagePath = /\/(?:@[^/]+\/)?(?:video|videos?|reel|shorts|watch|clip|status|posts?|share|stories|media|p|tv)\b/i;
+            const isVideoPage = url => {
+                try {
+                    const candidate = new URL(url, page.href);
+                    if (!/^https?:$/.test(candidate.protocol) || /\.(?:mp4|webm|m3u8|mpd)(?:$|[?#])/i.test(candidate.href)) return false;
+                    return videoPagePath.test(candidate.pathname)
+                        || ['v', 'video_id', 'item_id', 'aweme_id', 'clip_id'].some(key => (candidate.searchParams.get(key) || '').length >= 5);
+                } catch (_) { return false; }
+            };
+            let mediaPageUrl = isVideoPage(page.href) ? page.href : '';
+            const scopes = [];
+            const article = player.closest?.('[role="article"], article');
+            if (article) scopes.push(article);
+            let scope = player;
+            for (let depth = 0; scope && depth < 24; depth += 1, scope = scope.parentElement) {
+                if (!scopes.includes(scope)) scopes.push(scope);
+            }
+            for (const card of scopes) {
+                if (mediaPageUrl) break;
+                const anchors = card.matches?.('a[href]') ? [card] : [...(card.querySelectorAll?.('a[href]') || [])];
+                const candidates = anchors.flatMap(anchor => {
+                    try {
+                        const candidate = new URL(anchor.href, page.href);
+                        if (!isVideoPage(candidate.href)) return [];
+                        return [{ href: candidate.href, score: (candidate.origin === page.origin ? 20 : 0) + (/video|reel|short|watch|clip|status|post|share/i.test(candidate.pathname) ? 20 : 0) }];
+                    } catch (_) { return []; }
+                });
+                candidates.sort((a, b) => b.score - a.score);
+                if (candidates.length) mediaPageUrl = candidates[0].href;
+            }
+            if (!mediaPageUrl && page.pathname.replace(/\/+$/, '') && !/^\/(?:home|feed|foryou|explore|search|results|trending)$/i.test(page.pathname)) {
+                mediaPageUrl = page.href;
+            }
+
+            if (mediaPageUrl) {
+                const titleNode = player.closest?.('[role="article"], article')?.querySelector(
+                    '[data-ad-preview="message"], [data-ad-comet-preview="message"], [data-testid*="caption"], [data-e2e*="video-desc"], [itemprop="description"], figcaption'
+                );
+                const title = (titleNode?.innerText || titleNode?.textContent || document.title || 'فيديو من الصفحة').replace(/\s+/g, ' ').trim();
+                list.unshift({ url: mediaPageUrl, type: 'video', title: title.slice(0, 255), isPage: true });
+            }
         }
     } catch (_) {}
 
@@ -1340,7 +1495,7 @@ function renderSniffedMedia(items) {
                 const q = b.dataset.quality;
                 b.disabled = true;
                 b.textContent = '…';
-                const success = await sendToDesktop(item.url, q, item.type !== 'file');
+                const success = await sendToDesktop(item.url, q, item.type !== 'file', false, item.title);
                 if (success) {
                     b.textContent = 'تم الإرسال';
                 } else {
@@ -1382,6 +1537,100 @@ function setupSettings() {
             });
         });
     }
+    setupDeveloperTools();
+}
+
+function setupDeveloperTools() {
+    const toggle = document.getElementById('developer-mode-toggle');
+    const panel = document.getElementById('developer-tools-panel');
+    const version = document.getElementById('developer-version');
+    if (!toggle || !panel) return;
+    if (version) version.textContent = chrome.runtime.getManifest().version;
+
+    chrome.storage.local.get(['developer_mode'], result => {
+        applyDeveloperMode(result.developer_mode === true);
+        updateDeveloperDiagnostics();
+    });
+    toggle.addEventListener('click', () => {
+        const enabled = !developerModeEnabled;
+        applyDeveloperMode(enabled);
+        chrome.storage.local.set({ developer_mode: enabled });
+        if (enabled) updateDeveloperDiagnostics();
+        showToast(enabled ? 'تم تفعيل وضع المطور. أدواته متاحة في قسم الحماية.' : 'تم إيقاف وضع المطور وإخفاء الأدوات المتقدمة.');
+    });
+
+    document.getElementById('developer-check-btn')?.addEventListener('click', async event => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        nextAppCheckAt = 0;
+        await checkAppStatus();
+        button.disabled = false;
+        showToast(isAppOnline ? 'الاتصال بتطبيق ليدو يعمل' : 'تعذر الاتصال بتطبيق ليدو', !isAppOnline);
+    });
+
+    document.getElementById('developer-copy-btn')?.addEventListener('click', async () => {
+        let backgroundDiagnostics = { available: false };
+        try {
+            const response = await sendExtensionAction({ action: 'getExtensionDiagnostics' });
+            if (response?.success) {
+                backgroundDiagnostics = {
+                    available: true,
+                    version: response.version,
+                    serviceWorkerStartedAt: response.serviceWorkerStartedAt
+                        ? new Date(response.serviceWorkerStartedAt).toISOString() : null,
+                    grantedPermissionCount: response.grantedPermissionCount,
+                    grantedHostPermissionCount: response.grantedHostPermissionCount
+                };
+            }
+        } catch (_) {}
+        const report = {
+            extensionVersion: chrome.runtime.getManifest().version,
+            browser: navigator.userAgent,
+            desktopAppConnected: isAppOnline,
+            lastHealthCheck: lastAppCheckAt ? new Date(lastAppCheckAt).toISOString() : null,
+            healthCheckError: lastAppCheckError || null,
+            background: backgroundDiagnostics,
+            developerMode: true
+        };
+        try {
+            await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+            showToast('تم نسخ تقرير التشخيص الآمن');
+        } catch (_) {
+            showToast('تعذر النسخ؛ تحقق من صلاحية الحافظة', true);
+        }
+    });
+}
+
+function applyDeveloperMode(enabled) {
+    developerModeEnabled = !!enabled;
+    const toggle = document.getElementById('developer-mode-toggle');
+    const panel = document.getElementById('developer-tools-panel');
+    const state = document.getElementById('developer-mode-state');
+    const defaultProtectionNote = document.getElementById('default-protection-note');
+    if (toggle) {
+        toggle.setAttribute('aria-pressed', String(developerModeEnabled));
+        toggle.textContent = developerModeEnabled ? 'إيقاف وضع المطور' : 'تفعيل وضع المطور';
+    }
+    if (panel) panel.hidden = !developerModeEnabled;
+    if (defaultProtectionNote) defaultProtectionNote.hidden = developerModeEnabled;
+    if (state) state.textContent = developerModeEnabled
+        ? 'الوضع مفعّل. افتح قسم الحماية لعرض فاحص الشبكة وإعدادات الفلاتر.'
+        : 'إعدادات الحماية التلقائية تعمل في الخلفية.';
+    document.querySelectorAll('.developer-only').forEach(element => {
+        element.hidden = !developerModeEnabled;
+    });
+    if (!developerModeEnabled && document.getElementById('tab-badger')?.classList.contains('active')) {
+        setActiveSection('settings');
+    }
+}
+
+function updateDeveloperDiagnostics() {
+    const connection = document.getElementById('developer-connection');
+    const checkedAt = document.getElementById('developer-last-check');
+    if (connection) connection.textContent = isAppOnline ? 'متصل' : 'غير متصل';
+    if (checkedAt) checkedAt.textContent = lastAppCheckAt
+        ? new Date(lastAppCheckAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        : 'لم يتم الفحص بعد';
 }
 
 // ==========================================

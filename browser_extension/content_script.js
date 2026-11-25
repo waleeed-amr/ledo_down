@@ -1,6 +1,9 @@
 (function() {
     // Avoid injecting downloader UI or DOM hooks into the ChatGPT application.
     if (location.hostname === 'chatgpt.com' || location.hostname.endsWith('.chatgpt.com')) return;
+    // Content scripts can outlive an extension reload in an already-open tab.
+    // In that stale context Chrome withdraws the extension APIs; exit quietly.
+    if (typeof chrome === 'undefined' || !chrome.runtime?.id || !chrome.storage?.local) return;
 
     let hoveredVideo = null;
     let hideTimeout = null;
@@ -79,7 +82,7 @@
 
     const mainBtn = document.createElement('div');
     mainBtn.innerHTML = `
-        <img src="${chrome.runtime.getURL('icons/icon48.png')}" alt="Ledo" style="width:14px;height:14px;margin-right:6px;vertical-align:middle;display:inline-block; border-radius:3px;">
+        <span aria-hidden="true" style="width:14px;height:14px;margin-right:6px;display:inline-grid;place-items:center;border-radius:4px;background:linear-gradient(135deg,#22d3ee,#2563eb);font-size:10px;font-weight:800;color:#fff;">L</span>
         <span style="font-weight: 600; font-size: 11px; letter-spacing: 0.2px;">Download ▾</span>
     `;
     
@@ -247,18 +250,23 @@
                 const mRect = hoveredVideo.getBoundingClientRect();
                 
                 container.style.display = 'flex';
+                dropdown.style.display = 'none';
                 let btnWidth = container.offsetWidth || 160;
-                
-                container.style.top = (window.scrollY + mRect.top + 5) + 'px';
-                
-                // Position logic
-                let leftPos = window.scrollX + mRect.right - btnWidth - 15;
-                if (mRect.width < 200) {
-                    leftPos = window.scrollX + mRect.left + 5; 
+                let leftPos;
+                if (hoveredVideo.tagName.toUpperCase() === 'A') {
+                    // Keep the control clear of the link so it doesn't steal clicks.
+                    const controlHeight = container.offsetHeight || 34;
+                    const above = mRect.top - controlHeight - 10;
+                    const below = mRect.bottom + 10;
+                    const topPos = above >= 5 ? above : Math.min(below, window.innerHeight - controlHeight - 5);
+                    container.style.top = (window.scrollY + Math.max(5, topPos)) + 'px';
+                    leftPos = window.scrollX + mRect.left;
+                } else {
+                    container.style.top = (window.scrollY + mRect.top + 5) + 'px';
+                    leftPos = window.scrollX + mRect.right - btnWidth - 15;
+                    if (mRect.width < 200) leftPos = window.scrollX + mRect.left + 5;
                 }
-                // Clamp
                 leftPos = Math.max(5, Math.min(leftPos, window.innerWidth - btnWidth - 5));
-                
                 container.style.left = leftPos + 'px';
                 
                 clearTimeout(hideTimeout);
@@ -283,14 +291,135 @@
         }
     });
 
+    const VIDEO_PAGE_PATH = /\/(?:@[^/]+\/)?(?:video|videos?|reel|shorts|watch|clip|status|posts?|share|stories|media|p|tv)\b/i;
+    const DIRECT_MEDIA_PATH = /\.(?:mp4|m4v|webm|mkv|mov|m3u8|mpd|mp3|m4a|aac|wav|ogg)(?:$|[?#])/i;
+
+    function looksLikeVideoPageUrl(value) {
+        try {
+            const url = new URL(value, location.href);
+            if (!/^https?:$/.test(url.protocol) || DIRECT_MEDIA_PATH.test(url.href)) return false;
+            if (VIDEO_PAGE_PATH.test(url.pathname)) return true;
+            return ['v', 'video_id', 'videoid', 'item_id', 'aweme_id', 'clip_id', 'story_fbid']
+                .some(key => (url.searchParams.get(key) || '').length >= 5);
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function isGenericLandingPage(value) {
+        try {
+            const pathname = new URL(value, location.href).pathname.replace(/\/+$/, '').toLowerCase();
+            return !pathname || /^\/(?:home|feed|foryou|for-you|explore|search|results|trending|following)$/.test(pathname);
+        } catch (_) {
+            return true;
+        }
+    }
+
+    function getMediaScopes(mediaElement, maxDepth = 24) {
+        if (!mediaElement) return [];
+        const article = mediaElement.closest?.('[role="article"], article');
+        const scopes = article ? [article] : [];
+        let scope = mediaElement;
+        for (let depth = 0; scope && depth < maxDepth; depth += 1, scope = scope.parentElement) {
+            if (!scopes.includes(scope)) scopes.push(scope);
+        }
+        return scopes;
+    }
+
+    function findVideoPageUrl(mediaElement) {
+        if (!mediaElement || !['VIDEO', 'AUDIO'].includes(mediaElement.tagName?.toUpperCase())) return '';
+
+        // A detail page URL is more useful than a signed CDN or blob player URL.
+        if (looksLikeVideoPageUrl(location.href)) return location.href;
+
+        const scopes = getMediaScopes(mediaElement);
+        for (const scope of scopes) {
+            const anchors = scope.matches?.('a[href]') ? [scope] : [...(scope.querySelectorAll?.('a[href]') || [])];
+            const candidates = anchors.flatMap(anchor => {
+                try {
+                    const url = new URL(anchor.href, location.href);
+                    if (!looksLikeVideoPageUrl(url.href)) return [];
+                    let score = 100;
+                    if (url.origin === location.origin) score += 20;
+                    if (/\/(?:@[^/]+\/)?video\/\d+/i.test(url.pathname)) score += 30;
+                    if (/reel|short|watch|video|clip|post|share/i.test(anchor.getAttribute('aria-label') || anchor.innerText || '')) score += 8;
+                    return [{ href: url.href, score }];
+                } catch (_) {
+                    return [];
+                }
+            });
+            if (candidates.length) {
+                candidates.sort((a, b) => b.score - a.score);
+                return candidates[0].href;
+            }
+        }
+
+        // Some platforms put the video ID on the player/card instead of a link.
+        for (const scope of scopes) {
+            for (const key of ['data-video-id', 'data-videoid', 'data-video_id', 'data-aweme-id']) {
+                const id = scope.getAttribute?.(key);
+                if (id && /^\d{8,}$/.test(id) && domainMatches('facebook.com')) {
+                    return `https://www.facebook.com/watch/?v=${encodeURIComponent(id)}`;
+                }
+            }
+        }
+
+        // On a non-feed page the current URL is usually the canonical media page.
+        if (!isGenericLandingPage(location.href)) return location.href;
+        return '';
+    }
+
+    function getMediaTitle(mediaElement) {
+        const scopes = getMediaScopes(mediaElement, 16);
+        const titleSelectors = [
+            '[data-ad-preview="message"]', '[data-ad-comet-preview="message"]',
+            '[data-testid*="post_message"]', '[data-testid*="caption"]',
+            '[data-ad-rendering-role="story_message"]', '[data-e2e*="video-desc"]',
+            '[data-e2e*="desc"]', '[itemprop="description"]', 'figcaption',
+            '[aria-label*="caption" i]'
+        ];
+        for (const scope of scopes) {
+            for (const selector of titleSelectors) {
+                const node = scope.querySelector?.(selector);
+                const text = (node?.innerText || node?.textContent || '').replace(/\s+/g, ' ').trim();
+                if (text.length >= 8) return text.slice(0, 255);
+            }
+        }
+
+        const textScope = scopes.find(scope => scope.matches?.('[role="article"], article')) || scopes[Math.min(scopes.length - 1, 8)];
+        if (textScope) {
+            const generic = new Set(['facebook', 'tiktok', 'instagram', 'youtube', 'video', 'فيديو']);
+            const candidates = [...textScope.querySelectorAll('div[dir="auto"], [dir="auto"]')]
+                .map(node => (node.innerText || '').replace(/\s+/g, ' ').trim())
+                .filter(text => text.length >= 16 && text.length <= 500 && !generic.has(text.toLocaleLowerCase()));
+            candidates.sort((a, b) => b.length - a.length);
+            if (candidates[0]) return candidates[0].slice(0, 255);
+        }
+
+        const pageTitle = (document.title || '').replace(/\s+/g, ' ').trim();
+        const cleanedTitle = pageTitle.replace(/\s*[|·–—-]\s*(?:youtube|tiktok|facebook|instagram|x)\b.*$/i, '').trim();
+        return cleanedTitle.length >= 8 ? cleanedTitle.slice(0, 255) : '';
+    }
+
     function triggerDownload(quality, isYtDlp = true) {
         let targetUrl = window.location.href;
         if (hoveredVideo) {
             if (hoveredVideo.tagName.toUpperCase() === 'A' && hoveredVideo.href) {
                 targetUrl = hoveredVideo.href;
-            } else if (hoveredVideo.src && !hoveredVideo.src.startsWith('blob:') && hoveredVideo.src.startsWith('http')) {
-                targetUrl = hoveredVideo.src;
+            } else if ((hoveredVideo.currentSrc || hoveredVideo.src) && !/^(blob|data):/i.test(hoveredVideo.currentSrc || hoveredVideo.src) && /^https?:/i.test(hoveredVideo.currentSrc || hoveredVideo.src)) {
+                targetUrl = hoveredVideo.currentSrc || hoveredVideo.src;
             }
+        }
+
+        // A player src on social sites is usually a signed CDN URL. Keep the
+        // post/share page URL so the downloader can resolve its real metadata.
+        const mediaElement = ['VIDEO', 'AUDIO'].includes(hoveredVideo?.tagName?.toUpperCase()) ? hoveredVideo : null;
+        const mediaPageUrl = isYtDlp ? findVideoPageUrl(mediaElement) : '';
+        const mediaTitle = isYtDlp ? getMediaTitle(mediaElement) : '';
+        if (mediaPageUrl) targetUrl = mediaPageUrl;
+        else if (isYtDlp && mediaElement && (targetUrl === location.href || targetUrl.startsWith('blob:'))) {
+            showToast('مش لاقي رابط صفحة للفيديو. استخدم مشاركة ثم نسخ الرابط.', true);
+            return;
         }
 
         const originalHtml = mainBtn.innerHTML;
@@ -305,7 +434,7 @@
         }
 
         try {
-            chrome.runtime.sendMessage({ action: "directDownload", url: targetUrl, quality: quality }, (response) => {
+            chrome.runtime.sendMessage({ action: "directDownload", url: targetUrl, quality: quality, title: mediaTitle || document.title }, (response) => {
                 if (chrome.runtime.lastError) {
                     showToast("Extension updated. Please refresh the page.", true);
                     mainBtn.innerHTML = originalHtml;
@@ -338,9 +467,17 @@
         if (hoveredVideo) {
             if (hoveredVideo.tagName.toUpperCase() === 'A' && hoveredVideo.href) {
                 targetUrl = hoveredVideo.href;
-            } else if (hoveredVideo.src && !hoveredVideo.src.startsWith('blob:') && hoveredVideo.src.startsWith('http')) {
-                targetUrl = hoveredVideo.src;
+            } else if ((hoveredVideo.currentSrc || hoveredVideo.src) && !/^(blob|data):/i.test(hoveredVideo.currentSrc || hoveredVideo.src) && /^https?:/i.test(hoveredVideo.currentSrc || hoveredVideo.src)) {
+                targetUrl = hoveredVideo.currentSrc || hoveredVideo.src;
             }
+        }
+        const mediaElement = ['VIDEO', 'AUDIO'].includes(hoveredVideo?.tagName?.toUpperCase()) ? hoveredVideo : null;
+        const mediaPageUrl = findVideoPageUrl(mediaElement);
+        const mediaTitle = getMediaTitle(mediaElement);
+        if (mediaPageUrl) targetUrl = mediaPageUrl;
+        else if (mediaElement && (targetUrl === location.href || targetUrl.startsWith('blob:'))) {
+            showToast('مش لاقي رابط صفحة للفيديو. استخدم مشاركة ثم نسخ الرابط.', true);
+            return;
         }
         const originalHtml = mainBtn.innerHTML;
         mainBtn.innerHTML = `<span style="font-weight: 600; font-size: 13px; color: #818cf8;">Sending...</span>`;
@@ -352,7 +489,7 @@
         }
 
         try {
-            chrome.runtime.sendMessage({ action: "downloadUrl", url: targetUrl, referer: window.location.href }, (response) => {
+            chrome.runtime.sendMessage({ action: "downloadUrl", url: targetUrl, title: mediaTitle || document.title, referer: window.location.href }, (response) => {
                 if (chrome.runtime.lastError) {
                     showToast("Extension updated. Please refresh the page.", true);
                     mainBtn.innerHTML = originalHtml;
