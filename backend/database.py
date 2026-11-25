@@ -13,13 +13,23 @@ def get_data_dir():
         return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 DB_PATH = os.path.join(get_data_dir(), "downloads.db")
-engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False})
+engine = create_engine(
+    f"sqlite:///{DB_PATH}",
+    connect_args={"check_same_thread": False, "timeout": 30},
+    # Ten active downloads can each persist progress while the API and
+    # websocket broadcaster also access SQLite. Keep enough short-lived
+    # connections for that workload; SQLite still serializes writes safely.
+    pool_size=20,
+    max_overflow=10,
+    pool_timeout=30,
+)
 
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -40,6 +50,8 @@ class DownloadRecord(Base):
     error_message = Column(String, default="")
     created_at = Column(Float, default=lambda: time.time() * 1000)
     completed_at = Column(Float, nullable=True)
+    active_elapsed_seconds = Column(Float, default=0.0)
+    active_started_at = Column(Float, nullable=True)
     
     # Newly added fields for robust pause/resume
     save_path = Column(String, nullable=True)
@@ -47,6 +59,7 @@ class DownloadRecord(Base):
     cookies = Column(String, nullable=True)
     user_agent = Column(String, nullable=True)
     referer = Column(String, nullable=True)
+    source = Column(String, default="app")
 
 Base.metadata.create_all(bind=engine)
 
@@ -69,11 +82,19 @@ def auto_migrate():
                 "cookies": "STRING",
                 "user_agent": "STRING",
                 "referer": "STRING",
-                "completed_at": "FLOAT"
+                "source": "STRING DEFAULT 'app'",
+                "completed_at": "FLOAT",
+                "active_elapsed_seconds": "FLOAT DEFAULT 0",
+                "active_started_at": "FLOAT"
             }
             for col, type_def in new_cols.items():
                 if col not in columns:
                     cursor.execute(f"ALTER TABLE downloads ADD COLUMN {col} {type_def}")
+
+            # Cookies are session credentials. Remove values written by older
+            # versions and never keep them in the persistent download history.
+            if "cookies" in columns or "cookies" in new_cols:
+                cursor.execute("UPDATE downloads SET cookies = NULL WHERE cookies IS NOT NULL")
                     
             conn.connection.commit()
             cursor.close()

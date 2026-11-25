@@ -1,16 +1,26 @@
-import asyncio
-import psutil
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, BackgroundTasks, concurrency, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import httpx
-from typing import Any, Dict, List, Optional
-import uvicorn
 import os
 import sys
-import time
+import hashlib
 import re
+import asyncio
+import time
+import ssl
+import warnings
+from typing import Any, Dict, List, Optional
+from html.parser import HTMLParser
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
+from urllib.parse import urljoin
+
+# Install Windows' trusted roots before HTTP libraries create SSL contexts.
+# This supports trusted antivirus/corporate HTTPS inspection certificates
+# without turning off TLS verification.
+if not getattr(ssl, "_ledo_system_trust_enabled", False):
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+        ssl._ledo_system_trust_enabled = True
+    except ImportError:
+        warnings.warn("truststore is unavailable; using Python's default CA store", RuntimeWarning)
 
 # FIX for [Errno 22] Invalid argument in PyInstaller --noconsole mode
 # When running without a console, standard streams are None. This causes
@@ -25,7 +35,45 @@ if sys.stdin is None:
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
+overlay_site_packages = os.environ.get("LEDO_ENGINE_SITE_PACKAGES")
+if overlay_site_packages and os.path.isdir(overlay_site_packages):
+    # Package updates are installed into a user-writable directory by pip.
+    # Load them ahead of PyInstaller's frozen modules so updated requirements
+    # take effect on the next launch without modifying the installed app.
+    sys.path.insert(0, overlay_site_packages)
+    import importlib.machinery
+    sys.meta_path.insert(0, importlib.machinery.PathFinder)
+vendored_ytdlp_dir = os.path.join(current_dir, "vendor")
+if os.path.isdir(vendored_ytdlp_dir):
+    sys.path.append(vendored_ytdlp_dir)
+overlay_ytdlp_wheel = os.environ.get("LEDO_YTDLP_WHEEL")
+overlay_ytdlp_digest = os.environ.get("LEDO_YTDLP_SHA256", "").lower()
+if overlay_ytdlp_wheel and os.path.isfile(overlay_ytdlp_wheel) and re.fullmatch(r"[a-f0-9]{64}", overlay_ytdlp_digest):
+    # A verified PyPI wheel can be mounted as a zip import overlay, allowing
+    # site extractor updates without replacing the installed application.
+    try:
+        overlay_digest = hashlib.sha256()
+        with open(overlay_ytdlp_wheel, "rb") as wheel_file:
+            for wheel_chunk in iter(lambda: wheel_file.read(1024 * 1024), b""):
+                overlay_digest.update(wheel_chunk)
+        if overlay_digest.hexdigest() == overlay_ytdlp_digest:
+            sys.path.insert(0, overlay_ytdlp_wheel)
+            # PyInstaller's frozen finder normally precedes PathFinder and
+            # would shadow the verified package on sys.path. Put the standard
+            # finder first so only packages present in the wheel are overlaid;
+            # all other imports continue through the frozen application.
+            import importlib.machinery
+            sys.meta_path.insert(0, importlib.machinery.PathFinder)
+    except OSError:
+        pass
 
+import psutil
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, BackgroundTasks, concurrency, HTTPException, Header
+from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import httpx
+import uvicorn
 import orjson
 from loguru import logger
 from sqlalchemy.orm import Session
@@ -40,7 +88,8 @@ from database import get_db, DownloadRecord, SessionLocal
 from downloader import (
     start_download, active_downloads, get_category_dir, BASE_DOWNLOAD_DIR, IN_MEMORY_DB_CACHE,
     set_speed_limit, get_speed_limit, set_max_concurrent, get_max_concurrent,
-    set_auto_categorize, set_base_download_dir, get_smart_referer, pick_best_youtube_match
+    set_auto_categorize, set_base_download_dir, get_smart_referer, pick_best_youtube_match,
+    KNOWN_EXTENSIONS, safe_url_for_log
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi.responses import FileResponse
@@ -75,11 +124,65 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "Ledo Downloader Backend"}
+    database_status = "ok"
+    history_count = 0
+    try:
+        with SessionLocal() as db:
+            history_count = db.query(DownloadRecord.id).count()
+    except Exception as exc:
+        logger.warning(f"Health check database probe failed: {exc}")
+        database_status = "error"
+
+    import downloader as downloader_module
+    download_dir = downloader_module.BASE_DOWNLOAD_DIR
+    probe_dir = download_dir
+    while not os.path.exists(probe_dir) and os.path.dirname(probe_dir) != probe_dir:
+        probe_dir = os.path.dirname(probe_dir)
+    if os.path.isdir(download_dir) and os.access(download_dir, os.W_OK):
+        storage_status = "ready"
+    elif os.path.isdir(probe_dir) and os.access(probe_dir, os.W_OK):
+        storage_status = "will_create"
+    else:
+        storage_status = "unavailable"
+    return {
+        # Keep a 200/ok response for process liveness; component diagnostics carry readiness details.
+        "status": "ok",
+        "service": "Ledo Downloader Backend",
+        "diagnostics": {
+            "database": database_status,
+            "download_storage": storage_status,
+            "download_path": download_dir,
+            "history_items": history_count,
+            "active_downloads": len(active_downloads),
+        },
+    }
+
+
+def describe_download_error(message: str) -> tuple[str, bool, str]:
+    """Return stable retry guidance for common errors without replacing the raw error."""
+    text = str(message or "").lower()
+    if re.search(r"\b(401|403|404)\b|expired|login|cookie|session|rejected", text):
+        return "source_unavailable", False, "الرابط قد يكون منتهي الصلاحية أو يحتاج تسجيل دخول. حدّث الرابط أو أضف ملفات تعريف الارتباط للموقع."
+    if re.search(r"\b429\b|too many requests|rate.?limit", text):
+        return "rate_limited", True, "الموقع يحدّ من الطلبات حالياً. انتظر قليلاً ثم أعد المحاولة."
+    if re.search(r"network|timeout|timed out|connection|temporar|disconnected|http 5\d\d|status 0", text):
+        return "network", True, "يبدو أن الاتصال انقطع مؤقتاً. تحقق من الإنترنت وسيحاول التطبيق الاستئناف تلقائياً."
+    if re.search(r"no space|disk full|not enough space|permission denied|access is denied", text):
+        return "storage", False, "تحقق من مساحة القرص وصلاحية مجلد الحفظ، ثم اختر مجلداً آخر من الإعدادات إذا لزم الأمر."
+    if re.search(r"unsupported|invalid url|no suitable|not a valid url", text):
+        return "invalid_source", False, "تحقق من الرابط وأن الموقع أو نوع الملف مدعوم."
+    return "unknown", False, "راجع الرابط وإعدادات الموقع، ثم جرّب إعادة التحميل."
+
+@app.get("/api/engine-versions")
+async def engine_versions():
+    import yt_dlp
+    from yt_dlp.version import __version__ as yt_dlp_version
+    return {"yt_dlp": yt_dlp_version}
 
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
+        self.native_download_controllers = set()
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -105,7 +208,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 def normalize_youtube_watch_url(url: str) -> str:
-    """Drop YouTube playlist/radio parameters when a single watch video is requested."""
+    """Normalize a YouTube watch URL while preserving an explicitly selected playlist."""
     try:
         parts = urlsplit(url)
         host = (parts.hostname or "").lower()
@@ -119,9 +222,36 @@ def normalize_youtube_watch_url(url: str) -> str:
             return url
         if not video_id:
             return url
-        return urlunsplit(("https", "www.youtube.com", "/watch", urlencode({"v": video_id}), ""))
+        query = {"v": video_id}
+        playlist_id = parse_qs(parts.query).get("list", [""])[0]
+        if playlist_id:
+            query["list"] = playlist_id
+        return urlunsplit(("https", "www.youtube.com", "/watch", urlencode(query), ""))
     except (TypeError, ValueError):
         return url
+
+
+def is_youtube_playlist_url(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        return (
+            host == "youtube.com" or host.endswith(".youtube.com") or host == "youtu.be"
+        ) and bool(parse_qs(parts.query).get("list", [""])[0])
+    except (TypeError, ValueError):
+        return False
+
+
+def is_telegram_web_download_url(url: str) -> bool:
+    """Telegram Web's /d/ routes are browser-session actions, not file URLs."""
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if host not in {"web.telegram.org", "webk.telegram.org", "webz.telegram.org"}:
+            return False
+        return bool(re.match(r"^/(?:[kaz]/)?(?:d|download)/", parts.path, re.IGNORECASE))
+    except (TypeError, ValueError):
+        return False
 
 class DownloadRequest(BaseModel):
     url: str
@@ -129,6 +259,7 @@ class DownloadRequest(BaseModel):
     save_path: Optional[str] = None
     quality: Optional[str] = "best"
     title: Optional[str] = None
+    source: Optional[str] = "app"
     cookies: Optional[str] = None
     cookies_netscape: Optional[str] = None
     cookie_jar: Optional[List[Dict[str, Any]]] = None
@@ -137,6 +268,8 @@ class DownloadRequest(BaseModel):
     referer: Optional[str] = None
     selected_track_indices: Optional[List[int]] = None
     spotify_tracks: Optional[List[Dict[str, Any]]] = None
+    selected_video_indices: Optional[List[int]] = None
+    youtube_videos: Optional[List[Dict[str, Any]]] = None
 
 class InfoRequest(BaseModel):
     url: str
@@ -164,12 +297,15 @@ def _extract_youtube_audio(url: str, cookies: Optional[str] = None, user_agent: 
     options = {
         "quiet": True,
         "no_warnings": True,
+        # The desktop app must not inherit a user's standalone yt-dlp config:
+        # a custom format/client selection can hide the audio formats Radio
+        # Mode needs (and makes behavior differ between machines).
+        "ignoreconfig": True,
         "noplaylist": True,
         "skip_download": True,
         "socket_timeout": 20,
         "cachedir": False,
         "remote_components": ["ejs:github"],
-        "extractor_args": {"youtube": ["player_client=web_safari,web_embedded,-tv_downgraded", "player_skip=configs"]},
     }
     media_headers = {}
     if cookies:
@@ -211,6 +347,7 @@ def _extract_youtube_audio(url: str, cookies: Optional[str] = None, user_agent: 
     })
     return {
         "url": fmt["url"],
+        "http_headers": {**media_headers, **(fmt.get("http_headers") or {})},
         "title": info.get("title") or "YouTube audio",
         "duration": info.get("duration"),
         "thumbnail": info.get("thumbnail"),
@@ -232,6 +369,13 @@ class QuickAddRequest(BaseModel):
     filename: Optional[str] = None
     file_size: Optional[int] = None
     mime_type: Optional[str] = None
+    native_browser_download: Optional[bool] = False
+    native_download_paused: Optional[bool] = True
+    native_download_id: Optional[int] = None
+
+class NativeDownloadChoiceRequest(BaseModel):
+    download_id: int
+    choice: str
 
 class UpdateUrlRequest(BaseModel):
     id: str
@@ -267,7 +411,7 @@ async def resolve_short_url(url: str) -> str:
                     logger.info(f"Resolved Spotify URL to search query: {clean_title}")
                     return f"ytsearch1:{clean_title} audio"
         except Exception as e:
-            logger.warning(f"Failed to resolve spotify URL: {e}")
+            logger.warning(f"Failed to resolve spotify URL: {type(e).__name__}")
 
     if any(short in url for short in ["vt.tiktok.com", "vm.tiktok.com", "instagram.com/reel", "t.co/", "fb.watch"]):
         try:
@@ -275,7 +419,7 @@ async def resolve_short_url(url: str) -> str:
                 resp = await client.head(url, follow_redirects=True)
                 return str(resp.url)
         except Exception as e:
-            logger.warning(f"Failed to resolve short URL: {e}")
+            logger.warning(f"Failed to resolve short URL: {type(e).__name__}")
     return url
 
 async def check_is_direct_file(url: str, cookies: str = None, user_agent: str = None, referer: str = None) -> dict:
@@ -291,25 +435,36 @@ async def check_is_direct_file(url: str, cookies: str = None, user_agent: str = 
         if cookies:
             headers['Cookie'] = cookies
         async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as client:
-            resp = await client.head(url, headers=headers)
-            if resp.status_code not in (200, 206):
-                resp = await client.get(url, headers={"Range": "bytes=0-0", **headers})
-            
-            # If 403 or 404, retry with smart referer candidate if available
-            if resp.status_code in (403, 404):
+            status_code = 0
+            response_headers = {}
+            response_url = url
+            try:
+                head = await client.head(url, headers=headers)
+                status_code = head.status_code
+                response_headers = dict(head.headers)
+                response_url = str(head.url)
+            except Exception:
+                pass
+
+            async def range_probe(probe_headers):
+                async with client.stream("GET", url, headers={"Range": "bytes=0-0", **probe_headers}) as probe:
+                    return probe.status_code, dict(probe.headers), str(probe.url)
+
+            if status_code not in (200, 206):
+                status_code, response_headers, response_url = await range_probe(headers)
+
+            # If 403 or 404, retry with a smart referer candidate if available.
+            if status_code in (403, 404):
                 smart_ref = get_smart_referer(url)
-                if smart_ref and smart_ref != headers.get('Referer'):
-                    retry_headers = {**headers, 'Referer': smart_ref, 'Range': 'bytes=0-0'}
+                if smart_ref and smart_ref != headers.get("Referer"):
                     try:
-                        retry_resp = await client.get(url, headers=retry_headers)
-                        if retry_resp.status_code in (200, 206):
-                            resp = retry_resp
+                        status_code, response_headers, response_url = await range_probe({**headers, "Referer": smart_ref})
                     except Exception:
                         pass
-                
-            if resp.status_code in (200, 206):
-                content_type = resp.headers.get('content-type', '').lower()
-                content_dispo = resp.headers.get('content-disposition', '')
+
+            if status_code in (200, 206):
+                content_type = response_headers.get('content-type', '').lower()
+                content_dispo = response_headers.get('content-disposition', '')
                 
                 # Check for direct file signatures
                 is_direct = False
@@ -324,17 +479,10 @@ async def check_is_direct_file(url: str, cookies: str = None, user_agent: str = 
                     import os as _os
                     from urllib.parse import urlparse as _urlparse
                     
-                    ext_final = _os.path.splitext(_urlparse(str(resp.url)).path)[1].lower()
+                    ext_final = _os.path.splitext(_urlparse(response_url).path)[1].lower()
                     ext_orig  = _os.path.splitext(_urlparse(url).path)[1].lower()
                     
-                    target_exts = [
-                        '.exe', '.msi', '.zip', '.rar', '.7z',
-                        '.pdf', '.iso', '.apk', '.dmg',
-                        '.tar', '.gz', '.bz2', '.xz', '.zst',
-                        '.deb', '.rpm', '.pkg', '.jar'
-                    ]
-                    
-                    if ext_final in target_exts or ext_orig in target_exts:
+                    if ext_final in KNOWN_EXTENSIONS or ext_orig in KNOWN_EXTENSIONS:
                         is_direct = True
                         
                 if is_direct:
@@ -353,14 +501,104 @@ async def check_is_direct_file(url: str, cookies: str = None, user_agent: str = 
                     if filename == "downloaded_file":
                         parsed_name = _os.path.basename(_unquote(_urlparse(url).path))
                         if not parsed_name or len(parsed_name) < 3:
-                            parsed_name = _os.path.basename(_unquote(_urlparse(str(resp.url)).path))
+                            parsed_name = _os.path.basename(_unquote(_urlparse(response_url).path))
                         if parsed_name:
                             filename = parsed_name
                         
-                    size = int(resp.headers.get('content-length', 0))
-                    return {"is_direct": True, "title": filename, "size": size}
+                    size = int(response_headers.get('content-length', 0))
+                    if status_code == 206:
+                        content_range = response_headers.get("content-range", "")
+                        match = re.search(r"/([0-9]+)$", content_range)
+                        if match:
+                            size = int(match.group(1))
+                    return {"is_direct": True, "title": filename, "size": size, "url": response_url}
     except Exception as e:
         logger.warning(f"Direct file check failed: {e}")
+    return {"is_direct": False}
+
+
+class _DownloadLinkParser(HTMLParser):
+    """Collect likely download links from a public HTML landing page."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.links = []
+        self._anchor = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag.lower() == "a" and attrs.get("href"):
+            self._anchor = {"href": attrs["href"], "text": "", "download": attrs.get("download", "")}
+        elif tag.lower() == "meta" and attrs.get("http-equiv", "").lower() == "refresh":
+            match = re.search(r"url\s*=\s*['\"]?([^'\";]+)", attrs.get("content", ""), re.I)
+            if match:
+                self.links.append({"href": match.group(1).strip(), "text": "download", "download": ""})
+
+    def handle_data(self, data):
+        if self._anchor:
+            self._anchor["text"] += f" {data}"
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._anchor:
+            self.links.append(self._anchor)
+            self._anchor = None
+
+
+async def resolve_landing_page_file(url: str, cookies: str = None, user_agent: str = None, referer: str = None) -> dict:
+    """Follow accessible download buttons on simple landing pages; never emulate clicks or bypass gates."""
+    default_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    headers = {"User-Agent": user_agent or default_ua, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
+    if cookies:
+        headers["Cookie"] = cookies
+    if referer:
+        headers["Referer"] = referer
+    try:
+        timeout = httpx.Timeout(5.0, connect=3.0)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            async with client.stream("GET", url, headers=headers) as response:
+                if response.status_code >= 400 or "html" not in response.headers.get("content-type", "").lower():
+                    return {"is_direct": False}
+                final_page_url = str(response.url)
+                chunks, size = [], 0
+                async for chunk in response.aiter_bytes():
+                    remaining = 512 * 1024 - size
+                    if remaining <= 0:
+                        break
+                    piece = chunk[:remaining]
+                    chunks.append(piece)
+                    size += len(piece)
+                    if size >= 512 * 1024:
+                        break
+        parser = _DownloadLinkParser()
+        parser.feed(b"".join(chunks).decode("utf-8", errors="replace"))
+        origin = urlsplit(final_page_url).netloc.lower()
+        candidates = []
+        for link in parser.links:
+            href = (link.get("href") or "").strip()
+            if not href or href.startswith(("#", "javascript:", "mailto:", "data:")):
+                continue
+            candidate = urljoin(final_page_url, href)
+            parts = urlsplit(candidate)
+            if parts.scheme not in ("http", "https") or not parts.netloc:
+                continue
+            text = f"{link.get('text', '')} {link.get('download', '')} {parts.path}".lower()
+            score = 0
+            if any(word in text for word in ("download", "скачать", "تنزيل", "تحميل", "get file")):
+                score += 4
+            if re.search(r"\.(exe|msi|zip|rar|7z|pdf|iso|apk|dmg|tar|gz|xz|deb|rpm|pkg|jar)(?:$|[?#])", candidate, re.I):
+                score += 3
+            if parts.netloc.lower() == origin:
+                score += 1
+            if score:
+                candidates.append((score, candidate))
+        unique_candidates = list(dict.fromkeys(candidate for _, candidate in sorted(candidates, reverse=True)))[:4]
+        for candidate in unique_candidates:
+            candidate_cookies = cookies if urlsplit(candidate).netloc.lower() == origin else None
+            info = await check_is_direct_file(candidate, cookies=candidate_cookies, user_agent=user_agent, referer=final_page_url)
+            if info.get("is_direct"):
+                info["url"] = info.get("url") or candidate
+                return info
+    except Exception as exc:
+        logger.debug(f"Landing page download-link discovery failed for {safe_url_for_log(url)}: {type(exc).__name__}")
     return {"is_direct": False}
 
 @app.post("/api/quick-add")
@@ -375,7 +613,7 @@ async def trigger_quick_add(req: QuickAddRequest):
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Invalid URL format")
         
-    logger.info(f"Received quick add trigger for URL: {req.url}")
+    logger.info(f"Received quick add trigger for URL: {safe_url_for_log(req.url)}")
     payload = {
         "type": "open_quick_add",
         "url": req.url,
@@ -387,10 +625,35 @@ async def trigger_quick_add(req: QuickAddRequest):
         "referer": req.referer,
         "filename": req.filename,
         "file_size": req.file_size,
-        "mime_type": req.mime_type
+        "mime_type": req.mime_type,
+        "native_browser_download": bool(req.native_browser_download),
+        "native_download_paused": bool(req.native_download_paused),
+        "native_download_id": req.native_download_id,
     }
     await manager.broadcast(orjson.dumps(payload).decode("utf-8"))
     return {"status": "triggered"}
+
+@app.post("/api/quick-add/native-download-choice")
+async def choose_native_download(req: NativeDownloadChoiceRequest):
+    if req.download_id < 0 or req.choice not in {"resume", "cancel"}:
+        raise HTTPException(status_code=400, detail="Invalid browser download choice")
+    message = {
+        "type": "native_download_choice",
+        "download_id": req.download_id,
+        "choice": req.choice,
+    }
+    if not manager.native_download_controllers:
+        raise HTTPException(status_code=503, detail="The browser extension is not connected to Ledo.")
+    encoded = orjson.dumps(message).decode("utf-8")
+    for connection in list(manager.native_download_controllers):
+        try:
+            await connection.send_text(encoded)
+        except Exception:
+            manager.native_download_controllers.discard(connection)
+            manager.disconnect(connection)
+    if not manager.native_download_controllers:
+        raise HTTPException(status_code=503, detail="The browser extension connection was lost.")
+    return {"status": "sent", "connected_clients": len(manager.native_download_controllers)}
 
 @app.post("/api/sniff")
 async def sniff_url(req: InfoRequest):
@@ -412,11 +675,16 @@ async def sniff_url(req: InfoRequest):
         direct_info = await check_is_direct_file(
             req.url, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer
         )
+        if not direct_info.get("is_direct"):
+            direct_info = await resolve_landing_page_file(
+                req.url, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer
+            )
         if direct_info.get("is_direct"):
             return {
                 "title": direct_info.get("title", ""),
                 "size": direct_info.get("size", 0),
-                "type": "file"
+                "type": "file",
+                "url": direct_info.get("url", req.url)
             }
     
     # Try yt-dlp if it's a media site
@@ -512,25 +780,81 @@ async def create_youtube_audio_session(req: YouTubeAudioSessionRequest):
         logger.warning(f"YouTube audio session extraction failed: {exc}")
         raise HTTPException(status_code=502, detail="Could not resolve an audio-only stream. This video may be unavailable or restricted.")
     session_id = secrets.token_urlsafe(24)
+    stream_parts = urlsplit(resolved["url"])
+    stream_host = (stream_parts.hostname or "").lower()
+    if stream_parts.scheme != "https" or not (stream_host == "googlevideo.com" or stream_host.endswith(".googlevideo.com")):
+        raise HTTPException(status_code=502, detail="YouTube returned an unsupported audio stream")
     with _youtube_audio_sessions_lock:
         now = time.time()
         for key in [key for key, value in _youtube_audio_sessions.items() if now - value["created_at"] > _YOUTUBE_AUDIO_SESSION_TTL]:
             _youtube_audio_sessions.pop(key, None)
         if len(_youtube_audio_sessions) >= _YOUTUBE_AUDIO_MAX_SESSIONS:
             raise HTTPException(status_code=429, detail="Too many active audio sessions. Close an existing session and retry.")
-        # The browser receives the signed stream URL directly. Keep no copy of
-        # that credential-like URL in backend memory after constructing response.
-        _youtube_audio_sessions[session_id] = {"created_at": now}
+        # Keep signed YouTube URLs on the local backend. The browser only gets
+        # an opaque session URL, so expired credentials can be refreshed later
+        # without exposing them to the page or extension UI.
+        _youtube_audio_sessions[session_id] = {**resolved, "created_at": now}
     return {
         "session_id": session_id,
         "title": resolved["title"],
         "duration": resolved["duration"],
         "thumbnail": resolved["thumbnail"],
-        "stream_url": resolved["url"],
         "format_id": resolved["format_id"],
         "audio_bitrate_kbps": resolved["audio_bitrate_kbps"],
         "video_itags": resolved["video_itags"],
     }
+
+@app.get("/api/youtube/audio-session/{session_id}/stream")
+async def stream_youtube_audio_session(session_id: str, range_header: Optional[str] = Header(None, alias="Range")):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{20,128}", session_id):
+        raise HTTPException(status_code=404, detail="Audio session not found")
+    with _youtube_audio_sessions_lock:
+        session = _youtube_audio_sessions.get(session_id)
+        if session and time.time() - session["created_at"] > _YOUTUBE_AUDIO_SESSION_TTL:
+            _youtube_audio_sessions.pop(session_id, None)
+            session = None
+        session = dict(session) if session else None
+    if not session:
+        raise HTTPException(status_code=404, detail="Audio session expired. Start Radio Mode again.")
+
+    request_headers = {}
+    for key, value in (session.get("http_headers") or {}).items():
+        if str(key).lower() in {"user-agent", "cookie", "referer", "origin", "accept", "accept-language"}:
+            value = str(value)
+            if len(value) <= 16_384 and "\r" not in value and "\n" not in value:
+                request_headers[str(key)] = value
+    if range_header:
+        if len(range_header) > 128 or not re.fullmatch(r"bytes=\d*-\d*", range_header.strip()):
+            raise HTTPException(status_code=416, detail="Invalid audio range")
+        request_headers["Range"] = range_header.strip()
+    request_headers.setdefault("Accept-Encoding", "identity")
+
+    client = httpx.AsyncClient(timeout=httpx.Timeout(None, connect=20.0), follow_redirects=True)
+    try:
+        upstream_request = client.build_request("GET", session["url"], headers=request_headers)
+        upstream = await client.send(upstream_request, stream=True)
+    except httpx.HTTPError:
+        await client.aclose()
+        raise HTTPException(status_code=502, detail="Could not open the YouTube audio stream")
+    if upstream.status_code not in (200, 206):
+        await upstream.aclose()
+        await client.aclose()
+        raise HTTPException(status_code=502, detail="YouTube rejected the audio stream. Restart Radio Mode.")
+
+    response_headers = {"Accept-Ranges": "bytes", "Cache-Control": "no-store"}
+    for key in ("content-length", "content-range", "content-type"):
+        if upstream.headers.get(key):
+            response_headers[key.title()] = upstream.headers[key]
+
+    async def relay_audio():
+        try:
+            async for chunk in upstream.aiter_raw(64 * 1024):
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(relay_audio(), status_code=upstream.status_code, headers=response_headers)
 
 @app.delete("/api/youtube/audio-session/{session_id}")
 async def close_youtube_audio_session(session_id: str):
@@ -541,7 +865,123 @@ async def close_youtube_audio_session(session_id: str):
 @app.post("/api/download")
 async def add_download(req: DownloadRequest, db: Session = Depends(get_db)):
     req.url = normalize_youtube_watch_url(req.url)
-    logger.info(f"Received download request for URL: {req.url}")
+    if is_telegram_web_download_url(req.url):
+        raise HTTPException(
+            status_code=422,
+            detail="This Telegram Web link is tied to your browser session. Start the download in Telegram and save it through your browser.",
+        )
+    logger.info(f"Received download request for URL: {safe_url_for_log(req.url)}")
+
+    if req.youtube_videos is not None:
+        if not is_youtube_playlist_url(req.url):
+            return {"status": "error", "message": "رابط قائمة YouTube غير صالح."}
+        videos = req.youtube_videos
+        selected_indices = (
+            list(dict.fromkeys(req.selected_video_indices))
+            if req.selected_video_indices is not None
+            else list(range(len(videos)))
+        )
+        if not selected_indices or any(index < 0 or index >= len(videos) for index in selected_indices):
+            return {"status": "error", "message": "اختار فيديو واحدًا على الأقل من القائمة."}
+
+        selected_videos = []
+        allowed_qualities = {"best", "1080p", "720p", "480p", "360p", "audio"}
+        for index in selected_indices:
+            video = videos[index]
+            if not isinstance(video, dict):
+                continue
+            video_id = str(video.get('id') or '').strip()
+            if not re.fullmatch(r'[A-Za-z0-9_-]{11}', video_id):
+                continue
+            title = re.sub(r'\s+', ' ', str(video.get('title') or '')).strip()
+            if not title:
+                title = f"YouTube video {index + 1}"
+            video_quality = str(video.get('quality') or req.quality or "best")
+            if video_quality not in allowed_qualities:
+                video_quality = req.quality if req.quality in allowed_qualities else "best"
+            selected_videos.append((index, video_id, title, video_quality))
+        if not selected_videos:
+            return {"status": "error", "message": "لم يتم اختيار فيديوهات صالحة للتنزيل."}
+
+        now_ms = time.time() * 1000
+        pending = []
+        for index, video_id, title, video_quality in selected_videos:
+            download_id = str(uuid.uuid4())
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+            db.add(DownloadRecord(
+                id=download_id,
+                url=video_url,
+                filename=title,
+                status="starting",
+                progress=0.0,
+                speed=0.0,
+                total_size=0.0,
+                downloaded=0.0,
+                is_yt_dlp=True,
+                error_message="",
+                created_at=now_ms + index / 1000,
+                active_elapsed_seconds=0.0,
+                active_started_at=None,
+                save_path=req.save_path,
+                quality=video_quality,
+                cookies=req.cookies,
+                user_agent=req.user_agent,
+                referer=req.referer,
+                source="app",
+            ))
+            IN_MEMORY_DB_CACHE[download_id] = {
+                "status": "starting", "progress": 0.0, "speed": 0,
+                "active_elapsed_seconds": 0.0, "active_started_at": None,
+            }
+            pending.append((download_id, video_id, title, video_quality))
+        db.commit()
+
+        def broadcast_playlist_update(_download_id=None):
+            if app_loop and not app_loop.is_closed():
+                try:
+                    asyncio.run_coroutine_threadsafe(broadcast_downloads(), app_loop)
+                except Exception:
+                    pass
+
+        await broadcast_downloads()
+        started_ids = []
+        for download_id, video_id, title, video_quality in pending:
+            try:
+                start_download(
+                    f"https://www.youtube.com/watch?v={video_id}", db,
+                    use_ytdlp=True,
+                    on_update=broadcast_playlist_update,
+                    save_path=req.save_path,
+                    quality=video_quality,
+                    cookies=req.cookies,
+                    cookies_netscape=req.cookies_netscape,
+                    headers=req.headers,
+                    user_agent=req.user_agent,
+                    referer=req.referer,
+                    existing_id=download_id,
+                    title=title,
+                    source="app",
+                )
+                started_ids.append(download_id)
+            except Exception as exc:
+                logger.exception(f"Could not queue YouTube playlist video '{title}': {exc}")
+                failed = db.query(DownloadRecord).filter(DownloadRecord.id == download_id).first()
+                if failed:
+                    failed.status = "error"
+                    failed.error_message = str(exc)
+                    db.commit()
+                IN_MEMORY_DB_CACHE.setdefault(download_id, {}).update(
+                    status="error", error_message=str(exc), speed=0
+                )
+        await broadcast_downloads()
+        return {
+            "status": "started" if started_ids else "error",
+            "id": started_ids[0] if started_ids else "",
+            "ids": started_ids,
+            "count": len(started_ids),
+            "selected_count": len(selected_videos),
+            "multiple": len(started_ids) > 1,
+        }
     
     if is_spotify_url(req.url):
         supplied_tracks = []
@@ -665,7 +1105,7 @@ async def add_download(req: DownloadRequest, db: Session = Depends(get_db)):
                             status="error", error_message=reason, resolving=False, progress=0, speed=0
                         )
                         worker_db.commit()
-                        logger.warning(f"Skipping duplicate Spotify match for '{display_title}': {matched_url}")
+                        logger.warning(f"Skipping duplicate Spotify match for '{display_title}': {safe_url_for_log(matched_url)}")
                         return
 
                     # This coroutine runs on the event loop; no await occurs
@@ -754,9 +1194,17 @@ async def add_download(req: DownloadRequest, db: Session = Depends(get_db)):
     req.url = await resolve_short_url(req.url)
 
     is_yt_dlp = req.is_yt_dlp
-    if is_yt_dlp is None:
+    if is_yt_dlp is not True:
         direct_info = await check_is_direct_file(req.url, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer)
-        is_yt_dlp = not direct_info.get("is_direct", False)
+        if not direct_info.get("is_direct"):
+            direct_info = await resolve_landing_page_file(
+                req.url, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer
+            )
+        if direct_info.get("is_direct"):
+            req.url = direct_info.get("url") or req.url
+            is_yt_dlp = False
+        elif is_yt_dlp is None:
+            is_yt_dlp = True
         
     def broadcast_update(dl_id):
         if app_loop and not app_loop.is_closed():
@@ -777,7 +1225,8 @@ async def add_download(req: DownloadRequest, db: Session = Depends(get_db)):
             headers=req.headers,
             user_agent=req.user_agent,
             referer=req.referer,
-            title=req.title
+            title=req.title,
+            source="telegram" if req.source == "telegram" else "app"
         )
         logger.success(f"Download started successfully with ID: {download_id}")
         asyncio.create_task(broadcast_downloads())
@@ -845,7 +1294,7 @@ async def resume_download(db: Session = Depends(get_db), download_id: str = ""):
             asyncio.create_task(broadcast_downloads())
             return {"status": "resumed"}
         except Exception as e:
-            logger.error(f"Failed to resume download {download_id}: {e}")
+            logger.error(f"Failed to resume download {download_id}: {type(e).__name__}")
             return {"status": "error", "message": str(e)}
     return {"status": "not_found"}
 
@@ -856,7 +1305,7 @@ async def update_download_url(req: UpdateUrlRequest, db: Session = Depends(get_d
         raise HTTPException(status_code=400, detail="id and new_url are required")
     
     clean_url = req.new_url.strip()
-    logger.info(f"Update URL requested for download ID {req.id}: {clean_url}")
+    logger.info(f"Update URL requested for download ID {req.id}: {safe_url_for_log(clean_url)}")
     
     # 1. Stop active worker if running
     if req.id in active_downloads:
@@ -907,11 +1356,11 @@ async def update_download_url(req: UpdateUrlRequest, db: Session = Depends(get_d
             referer=db_rec.referer,
             title=db_rec.filename
         )
-        logger.success(f"Download {req.id} resumed successfully with new URL: {clean_url}")
+        logger.success(f"Download {req.id} resumed successfully with new URL: {safe_url_for_log(clean_url)}")
         asyncio.create_task(broadcast_downloads())
         return {"status": "updated", "id": req.id}
     except Exception as e:
-        logger.error(f"Failed to resume download {req.id} after URL update: {e}")
+        logger.error(f"Failed to resume download {req.id} after URL update: {type(e).__name__}")
         return {"status": "error", "message": str(e)}
 
 @app.delete("/api/cancel/")
@@ -1012,7 +1461,7 @@ def sync_extract_info(url: str, ydl_opts: dict):
 @app.post("/api/info")
 async def get_info(req: InfoRequest):
     req.url = normalize_youtube_watch_url(req.url)
-    logger.info(f"Fetching info for URL: {req.url}")
+    logger.info(f"Fetching info for URL: {safe_url_for_log(req.url)}")
     
     # ── Spotify: Return metadata directly without hitting YouTube ──
     if is_spotify_url(req.url):
@@ -1098,13 +1547,20 @@ async def get_info(req: InfoRequest):
     
     try:
         # Check if direct file first
-        direct_info = await check_is_direct_file(req.url)
+        direct_info = await check_is_direct_file(
+            req.url, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer
+        )
+        if not direct_info.get("is_direct"):
+            direct_info = await resolve_landing_page_file(
+                req.url, cookies=req.cookies, user_agent=req.user_agent, referer=req.referer
+            )
         if direct_info.get("is_direct"):
             return {
                 "status": "success",
                 "download_info": {
                     "is_direct": True,
                     "title": direct_info["title"],
+                    "direct_url": direct_info.get("url", req.url),
                     "thumbnail": "",
                     "sizes": {
                         "best": direct_info["size"],
@@ -1117,7 +1573,9 @@ async def get_info(req: InfoRequest):
         ydl_opts = {
             'quiet': True, 
             'no_warnings': True,
-            'nocheckcertificate': True,
+            'ignoreconfig': True,
+            'noplaylist': False,
+            'ignoreerrors': True,
             'force_ipv4': True,
             'skip_download': True,
             'socket_timeout': 10,
@@ -1151,6 +1609,12 @@ async def get_info(req: InfoRequest):
             anonymous_opts['http_headers'].pop('Cookie', None)
             extract_attempts.append(anonymous_opts)
         extract_attempts.append(ydl_opts)
+        # Some hosts check the TLS/client fingerprint as well as HTTP headers.
+        # Try yt-dlp's optional curl-cffi browser impersonation only after the
+        # normal extractor request fails, keeping the common path lightweight.
+        impersonated_opts = dict(ydl_opts)
+        impersonated_opts['impersonate'] = 'chrome'
+        extract_attempts.append(impersonated_opts)
 
         info = None
         last_extract_error = None
@@ -1161,7 +1625,9 @@ async def get_info(req: InfoRequest):
                 )
                 if candidate:
                     info = candidate
-                    if candidate.get('formats'):
+                    if candidate.get('formats') or (
+                        is_youtube_playlist_url(req.url) and candidate.get('entries') is not None
+                    ):
                         break
             except Exception as extract_error:
                 last_extract_error = extract_error
@@ -1173,6 +1639,50 @@ async def get_info(req: InfoRequest):
             if last_extract_error:
                 raise last_extract_error
             raise Exception("Failed to extract video information or unsupported site.")
+
+        if is_youtube_playlist_url(req.url):
+            playlist_entries = info.get('entries') or []
+            videos = []
+            for ordinal, entry in enumerate(playlist_entries, start=1):
+                if not isinstance(entry, dict):
+                    continue
+                video_id = str(entry.get('id') or '').strip()
+                if not re.fullmatch(r'[A-Za-z0-9_-]{11}', video_id):
+                    entry_url = str(entry.get('url') or '')
+                    try:
+                        entry_parts = urlsplit(entry_url)
+                        video_id = (
+                            parse_qs(entry_parts.query).get('v', [''])[0]
+                            if entry_parts.hostname and 'youtube.com' in entry_parts.hostname
+                            else entry_parts.path.strip('/').split('/', 1)[0]
+                            if entry_parts.hostname and 'youtu.be' in entry_parts.hostname
+                            else ''
+                        )
+                    except (TypeError, ValueError):
+                        video_id = ''
+                if not re.fullmatch(r'[A-Za-z0-9_-]{11}', video_id):
+                    continue
+                video_title = re.sub(r'\s+', ' ', str(entry.get('title') or '')).strip()
+                videos.append({
+                    'id': video_id,
+                    'title': video_title or f'Video {ordinal}',
+                    'duration': entry.get('duration'),
+                    'thumbnail': entry.get('thumbnail') or '',
+                    'playlist_index': entry.get('playlist_index') or ordinal,
+                })
+            if not videos:
+                return {"status": "error", "message": "لم أتمكن من قراءة فيديوهات قائمة YouTube."}
+            return {
+                "status": "success",
+                "download_info": {
+                    "is_youtube_playlist": True,
+                    "title": info.get('title') or "YouTube playlist",
+                    "playlist_id": parse_qs(urlsplit(req.url).query).get('list', [''])[0],
+                    "video_count": len(videos),
+                    "videos": videos,
+                    "thumbnail": info.get('thumbnail') or (videos[0].get('thumbnail') if videos else ''),
+                }
+            }
                 
         formats = info.get('formats', [])
         
@@ -1183,6 +1693,8 @@ async def get_info(req: InfoRequest):
                 "download_info": {
                     "title": info.get('title', 'Unknown Title'),
                     "thumbnail": info.get('thumbnail', ''),
+                "duration": info.get('duration'),
+                "uploader": info.get('uploader') or info.get('channel') or '',
                     "sizes": {"best": root_size, "1080p": root_size, "720p": root_size, "480p": root_size, "360p": root_size, "audio": root_size}
                 }
             }
@@ -1262,6 +1774,8 @@ async def get_info(req: InfoRequest):
             "download_info": {
                 "title": info.get('title', 'Unknown Title'),
                 "thumbnail": info.get('thumbnail', ''),
+                "duration": info.get('duration'),
+                "uploader": info.get('uploader') or info.get('channel') or '',
                 "sizes": {
                     "best": total_best,
                     "1080p": total_1080,
@@ -1334,7 +1848,21 @@ def add_queue_positions(downloads):
     return downloads
 
 
+_downloads_broadcast_lock = asyncio.Lock()
+
+
 async def broadcast_downloads():
+    # Progress hooks can fire from every worker at roughly the same time.
+    # Coalesce overlapping broadcasts so they do not each hold a DB connection
+    # while serializing and sending the same full download list.
+    if _downloads_broadcast_lock.locked():
+        return
+    async with _downloads_broadcast_lock:
+        await _broadcast_downloads_once()
+
+
+async def _broadcast_downloads_once():
+    payload = None
     with SessionLocal() as db:
         try:
             records = db.query(DownloadRecord).all()
@@ -1354,8 +1882,12 @@ async def broadcast_downloads():
                 error_message = cache.get("error_message", rec.error_message)
 
                 final_path = getattr(rec, 'save_path', None)
+                if status == "completed" and filename:
+                    final_path = _locate_download_output(filename, final_path) or final_path
                 if not final_path and filename:
                     final_path = os.path.join(get_category_dir(filename), filename)
+
+                error_code, retryable, error_hint = describe_download_error(error_message)
                 
                 downloads.append({
                     "id": rec.id,
@@ -1366,9 +1898,15 @@ async def broadcast_downloads():
                     "total_size": total_size,
                     "downloaded": downloaded_val,
                     "filename": filename,
+                    "source": getattr(rec, 'source', 'app') or 'app',
                     "error_message": error_message,
+                    "error_code": error_code if status == "error" else None,
+                    "retryable": retryable if status == "error" else False,
+                    "error_hint": error_hint if status == "error" else None,
                     "created_at": getattr(rec, 'created_at', None) or now_ms,
                     "completed_at": cache.get("completed_at", getattr(rec, 'completed_at', None)),
+                    "active_elapsed_seconds": cache.get("active_elapsed_seconds", getattr(rec, 'active_elapsed_seconds', 0) or 0),
+                    "active_started_at": cache.get("active_started_at", getattr(rec, 'active_started_at', None)),
                     "save_path": final_path
                 })
                 
@@ -1380,6 +1918,9 @@ async def broadcast_downloads():
                     final_path = getattr(ctx, 'save_path', None)
                     if not final_path and filename:
                         final_path = os.path.join(get_category_dir(filename), filename)
+
+                    error_message = cache.get("error_message", "")
+                    error_code, retryable, error_hint = describe_download_error(error_message)
                     
                     downloads.append({
                         "id": d_id,
@@ -1390,9 +1931,15 @@ async def broadcast_downloads():
                         "total_size": cache.get("total_size", 0.0),
                         "downloaded": cache.get("downloaded", 0.0),
                         "filename": filename,
-                        "error_message": cache.get("error_message", ""),
+                        "source": cache.get("source", "app"),
+                        "error_message": error_message,
+                        "error_code": error_code if cache.get("status") == "error" else None,
+                        "retryable": retryable if cache.get("status") == "error" else False,
+                        "error_hint": error_hint if cache.get("status") == "error" else None,
                         "created_at": now_ms,
                         "completed_at": cache.get("completed_at"),
+                        "active_elapsed_seconds": cache.get("active_elapsed_seconds", 0),
+                        "active_started_at": cache.get("active_started_at"),
                         "save_path": final_path
                     })
             
@@ -1401,9 +1948,14 @@ async def broadcast_downloads():
                 "type": "downloads",
                 "downloads": downloads
             }
-            await manager.broadcast(orjson.dumps(payload).decode('utf-8'))
         except Exception as e:
             logger.error(f"Error broadcasting downloads: {e}")
+    # Sending to every websocket can take an arbitrary amount of time. Release
+    # the SQLite session before awaiting network I/O so frequent progress
+    # broadcasts cannot exhaust the connection pool during parallel downloads.
+    if payload is not None:
+        await manager.broadcast(orjson.dumps(payload).decode('utf-8'))
+
 
 @app.get("/api/downloads")
 async def get_all_downloads(db: Session = Depends(get_db)):
@@ -1424,9 +1976,12 @@ async def get_all_downloads(db: Session = Depends(get_db)):
         error_message = cache.get("error_message", rec.error_message)
 
         final_path = getattr(rec, 'save_path', None)
+        if status == "completed" and filename:
+            final_path = _locate_download_output(filename, final_path) or final_path
         if not final_path and filename:
             final_path = os.path.join(get_category_dir(filename), filename)
             
+        error_code, retryable, error_hint = describe_download_error(error_message)
         downloads.append({
             "id": rec.id,
             "url": rec.url,
@@ -1436,9 +1991,15 @@ async def get_all_downloads(db: Session = Depends(get_db)):
             "total_size": total_size,
             "downloaded": downloaded_val,
             "filename": filename,
+            "source": getattr(rec, 'source', 'app') or 'app',
             "error_message": error_message,
+            "error_code": error_code if status == "error" else None,
+            "retryable": retryable if status == "error" else False,
+            "error_hint": error_hint if status == "error" else None,
             "created_at": getattr(rec, 'created_at', None) or now_ms,
             "completed_at": cache.get("completed_at", getattr(rec, 'completed_at', None)),
+            "active_elapsed_seconds": cache.get("active_elapsed_seconds", getattr(rec, 'active_elapsed_seconds', 0) or 0),
+            "active_started_at": cache.get("active_started_at", getattr(rec, 'active_started_at', None)),
             "save_path": final_path
         })
         
@@ -1451,6 +2012,8 @@ async def get_all_downloads(db: Session = Depends(get_db)):
             if not final_path and filename:
                 final_path = os.path.join(get_category_dir(filename), filename)
             
+            error_message = cache.get("error_message", "")
+            error_code, retryable, error_hint = describe_download_error(error_message)
             downloads.append({
                 "id": d_id,
                 "url": getattr(ctx, 'url', ''),
@@ -1460,13 +2023,77 @@ async def get_all_downloads(db: Session = Depends(get_db)):
                 "total_size": cache.get("total_size", 0.0),
                 "downloaded": cache.get("downloaded", 0.0),
                 "filename": filename,
-                "error_message": cache.get("error_message", ""),
+                "source": cache.get("source", "app"),
+                "error_message": error_message,
+                "error_code": error_code if cache.get("status") == "error" else None,
+                "retryable": retryable if cache.get("status") == "error" else False,
+                "error_hint": error_hint if cache.get("status") == "error" else None,
                 "created_at": now_ms,
                 "completed_at": cache.get("completed_at"),
+                "active_elapsed_seconds": cache.get("active_elapsed_seconds", 0),
+                "active_started_at": cache.get("active_started_at"),
                 "save_path": final_path
             })
             
     return add_queue_positions(downloads)
+
+
+def _locate_download_output(recorded_filename: str, recorded_path: Optional[str]) -> str:
+    filename = os.path.basename(str(recorded_filename or "").strip())
+    if not filename:
+        return ""
+
+    stored_path = os.path.abspath(str(recorded_path or "")) if recorded_path else ""
+    if stored_path and os.path.isfile(stored_path):
+        return stored_path
+
+    roots = [stored_path] if stored_path and os.path.isdir(stored_path) else []
+    candidates = []
+    for root in roots:
+        candidates.extend((
+            os.path.join(root, filename),
+            os.path.join(get_category_dir(filename, base_dir=root), filename),
+        ))
+    candidates.append(os.path.join(get_category_dir(filename), filename))
+
+    for candidate in dict.fromkeys(candidates):
+        if os.path.isfile(candidate):
+            return candidate
+
+    # Categorization settings may have changed since this item finished.
+    # Search only the user's selected folder as a fallback, and match the exact
+    # sanitized filename stored by the downloader.
+    for root in roots:
+        for current_root, _directories, files in os.walk(root):
+            if filename in files:
+                return os.path.join(current_root, filename)
+    return ""
+
+
+def _calculate_sha256(file_path: str) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with open(file_path, "rb") as downloaded_file:
+        for block in iter(lambda: downloaded_file.read(1024 * 1024), b""):
+            digest.update(block)
+            size += len(block)
+    return digest.hexdigest(), size
+
+
+@app.get("/api/downloads/{download_id}/sha256")
+async def get_download_sha256(download_id: str, db: Session = Depends(get_db)):
+    rec = db.query(DownloadRecord).filter(DownloadRecord.id == download_id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Download record not found.")
+    if rec.status != "completed":
+        raise HTTPException(status_code=409, detail="The download must finish before its checksum can be calculated.")
+
+    file_path = await asyncio.to_thread(_locate_download_output, rec.filename, rec.save_path)
+    if not file_path:
+        raise HTTPException(status_code=404, detail="The downloaded file could not be found on disk.")
+
+    sha256, size = await asyncio.to_thread(_calculate_sha256, file_path)
+    return {"algorithm": "SHA-256", "sha256": sha256, "size": size, "filename": os.path.basename(file_path)}
 
 class ScheduleRequest(BaseModel):
     url: str
@@ -1476,14 +2103,16 @@ class ScheduleRequest(BaseModel):
     run_at: str
     title: Optional[str] = None
     selected_track_indices: Optional[List[int]] = None
+    selected_video_indices: Optional[List[int]] = None
+    youtube_videos: Optional[List[Dict[str, Any]]] = None
 
 @app.post("/api/schedule")
 async def schedule_download(req: ScheduleRequest, db: Session = Depends(get_db)):
-    logger.info(f"Scheduling download for {req.url} at {req.run_at}")
+    logger.info(f"Scheduling download for {safe_url_for_log(req.url)} at {req.run_at}")
     req.url = await resolve_short_url(req.url)
     run_date = datetime.fromisoformat(req.run_at.replace('Z', '+00:00'))
     
-    def job_func(url, is_yt_dlp, save_path, quality, title, selected_track_indices):
+    def job_func(url, is_yt_dlp, save_path, quality, title, selected_track_indices, youtube_videos, selected_video_indices):
         if selected_track_indices is not None and is_spotify_url(url):
             async def start_scheduled_download():
                 db_session = SessionLocal()
@@ -1507,6 +2136,30 @@ async def schedule_download(req: ScheduleRequest, db: Session = Depends(get_db))
                 logger.error("Could not start scheduled Spotify selection: app event loop is unavailable")
             return
 
+        if youtube_videos is not None:
+            async def start_scheduled_youtube_playlist():
+                db_session = SessionLocal()
+                try:
+                    scheduled_req = DownloadRequest(
+                        url=url,
+                        is_yt_dlp=True,
+                        save_path=save_path,
+                        quality=quality,
+                        title=title,
+                        youtube_videos=youtube_videos,
+                        selected_video_indices=selected_video_indices,
+                    )
+                    result = await add_download(scheduled_req, db_session)
+                    logger.info(f"Scheduled YouTube playlist selection started: {result}")
+                finally:
+                    db_session.close()
+
+            if app_loop and not app_loop.is_closed():
+                asyncio.run_coroutine_threadsafe(start_scheduled_youtube_playlist(), app_loop)
+            else:
+                logger.error("Could not start scheduled YouTube playlist: app event loop is unavailable")
+            return
+
         db_session = SessionLocal()
         try:
             download_id = start_download(url, db_session, use_ytdlp=is_yt_dlp, save_path=save_path, quality=quality, title=title)
@@ -1520,7 +2173,10 @@ async def schedule_download(req: ScheduleRequest, db: Session = Depends(get_db))
         job_func, 
         'date', 
         run_date=run_date, 
-        args=[req.url, req.is_yt_dlp, req.save_path, req.quality, req.title, req.selected_track_indices]
+        args=[
+            req.url, req.is_yt_dlp, req.save_path, req.quality, req.title,
+            req.selected_track_indices, req.youtube_videos, req.selected_video_indices,
+        ]
     )
     return {"status": "scheduled", "time": str(run_date)}
 
@@ -1653,6 +2309,19 @@ async def stream_file(download_id: str, db: Session = Depends(get_db)):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    expected_token = os.environ.get("LEDO_WS_TOKEN", "")
+    provided_token = websocket.query_params.get("token", "")
+    origin = websocket.headers.get("origin", "")
+    allowed_origins = {"null", "file://"}
+    if (
+        origin not in allowed_origins
+        or not expected_token
+        or len(provided_token) != len(expected_token)
+        or not provided_token.isascii()
+        or not secrets.compare_digest(provided_token, expected_token)
+    ):
+        await websocket.close(code=1008)
+        return
     await manager.connect(websocket)
     try:
         await broadcast_system_stats()
@@ -1662,6 +2331,11 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.debug(f"Received WS message: {data}")
             try:
                 msg = orjson.loads(data)
+                if msg.get("action") == "ping":
+                    continue
+                if msg.get("action") == "register_native_download_controller":
+                    manager.native_download_controllers.add(websocket)
+                    continue
                 action = msg.get("action")
                 dl_id = msg.get("id")
                 if action and dl_id:
@@ -1675,7 +2349,6 @@ async def websocket_endpoint(websocket: WebSocket):
                                 db_rec.status = "paused"
                                 db_rec.speed = 0
                                 db.commit()
-                            await broadcast_downloads()
                         elif action == "cancel":
                             if dl_id in active_downloads:
                                 dl = active_downloads[dl_id]
@@ -1685,15 +2358,18 @@ async def websocket_endpoint(websocket: WebSocket):
                             if db_rec:
                                 db.delete(db_rec)
                                 db.commit()
-                            await broadcast_downloads()
+                    if action in ("pause", "cancel"):
+                        await broadcast_downloads()
             except orjson.JSONDecodeError:
                 pass
             except Exception as e:
                 logger.error(f"Error handling WS message: {e}")
     except WebSocketDisconnect:
+        manager.native_download_controllers.discard(websocket)
         manager.disconnect(websocket)
     except Exception as e:
         logger.error(f"WebSocket unexpected error: {e}")
+        manager.native_download_controllers.discard(websocket)
         manager.disconnect(websocket)
 
 # Background task to send system stats periodically
@@ -1744,7 +2420,62 @@ async def startup_event():
         
     asyncio.create_task(system_monitor())
 
+@app.get("/api/stats/summary")
+async def get_stats_summary(db: Session = Depends(get_db)):
+    """Fast aggregated download statistics."""
+    try:
+        from sqlalchemy import func as sqlfunc
+        total = db.query(sqlfunc.count(DownloadRecord.id)).scalar() or 0
+        completed = db.query(sqlfunc.count(DownloadRecord.id)).filter(
+            DownloadRecord.status == "completed"
+        ).scalar() or 0
+        failed = db.query(sqlfunc.count(DownloadRecord.id)).filter(
+            DownloadRecord.status == "error"
+        ).scalar() or 0
+        active = db.query(sqlfunc.count(DownloadRecord.id)).filter(
+            DownloadRecord.status.in_(("downloading", "starting", "resolving", "preparing", "processing"))
+        ).scalar() or 0
+        total_bytes = db.query(sqlfunc.sum(DownloadRecord.downloaded)).filter(
+            DownloadRecord.status == "completed",
+            DownloadRecord.downloaded.isnot(None)
+        ).scalar() or 0
+        return {
+            "total": int(total),
+            "completed": int(completed),
+            "failed": int(failed),
+            "active": int(active),
+            "total_bytes_downloaded": int(total_bytes),
+        }
+    except Exception as e:
+        logger.warning(f"Stats summary error: {e}")
+        return {"total": 0, "completed": 0, "failed": 0, "active": 0, "total_bytes_downloaded": 0}
+
+
 if __name__ == "__main__":
+    if "--validate-engine-overlay" in sys.argv[1:]:
+        # Electron runs the frozen backend once with the staged package overlay
+        # before activation. Reaching here means the app's complete import graph
+        # and its optional HTTP impersonation transport loaded successfully.
+        try:
+            import aiohttp
+            import curl_cffi
+            import fastapi
+            import yt_dlp
+            import yt_dlp.networking._curlcffi  # noqa: F401
+
+            overlay_root = os.path.normcase(os.path.abspath(overlay_site_packages or ""))
+            for package in (aiohttp, curl_cffi, fastapi, yt_dlp):
+                package_path = os.path.normcase(os.path.abspath(package.__file__ or ""))
+                if not overlay_root or os.path.commonpath((overlay_root, package_path)) != overlay_root:
+                    raise RuntimeError(f"{package.__name__} was not loaded from the staged requirements overlay")
+            logger.info(
+                f"Engine overlay validation passed: yt-dlp {yt_dlp.version.__version__}, "
+                f"curl-cffi {curl_cffi.__version__}."
+            )
+            raise SystemExit(0)
+        except Exception:
+            logger.exception("Engine overlay validation failed.")
+            raise SystemExit(1)
     logger.info("Starting Uvicorn server...")
     # host="127.0.0.1" restricts connections to the local machine only (closes IP vulnerabilities)
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("LEDO_BACKEND_PORT", "8000")), log_level="warning")

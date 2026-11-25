@@ -6,8 +6,17 @@ from Spotify's embed pages and converting them to YouTube search queries.
 import re
 import json
 import urllib.request
+from urllib.parse import urlsplit
 from loguru import logger
 from typing import Optional, List, Dict
+
+
+def _safe_url_for_log(value: str) -> str:
+    try:
+        parsed = urlsplit(str(value))
+        return f"{parsed.scheme}://{parsed.hostname or ''}{parsed.path}" if parsed.scheme else "<invalid-url>"
+    except (TypeError, ValueError):
+        return "<invalid-url>"
 
 
 def _fetch_url(url: str, timeout: int = 10) -> Optional[str]:
@@ -20,7 +29,7 @@ def _fetch_url(url: str, timeout: int = 10) -> Optional[str]:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode("utf-8", errors="replace")
     except Exception as e:
-        logger.warning(f"Failed to fetch {url}: {e}")
+        logger.warning(f"Failed to fetch {_safe_url_for_log(url)}: {type(e).__name__}")
         return None
 
 
@@ -58,7 +67,7 @@ def _get_oembed_title(url: str) -> Optional[str]:
             data = json.loads(body)
             return data.get("title")
     except Exception as e:
-        logger.warning(f"OEmbed failed for {url}: {e}")
+        logger.warning(f"OEmbed failed for {_safe_url_for_log(url)}: {type(e).__name__}")
     return None
 
 
@@ -299,7 +308,7 @@ def resolve_spotify(url: str) -> Optional[Dict]:
     """
     parsed = _parse_spotify_url(url)
     if not parsed:
-        logger.warning(f"Could not parse Spotify URL: {url}")
+        logger.warning(f"Could not parse Spotify URL: {_safe_url_for_log(url)}")
         return None
     
     content_type = parsed["type"]

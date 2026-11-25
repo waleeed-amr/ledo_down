@@ -1,9 +1,23 @@
 import os
 import threading
 import time
-from urllib.parse import urlparse, unquote
+import ssl
+import warnings
+from urllib.parse import urlparse, unquote, parse_qs
 import uuid
 import asyncio
+
+# On Windows, downloads may pass through antivirus or corporate HTTPS
+# inspection. Truststore lets Python use the same explicitly trusted roots as
+# Windows while keeping certificate and hostname verification enabled.
+if not getattr(ssl, "_ledo_system_trust_enabled", False):
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+        ssl._ledo_system_trust_enabled = True
+    except ImportError:
+        warnings.warn("truststore is unavailable; using Python's default CA store", RuntimeWarning)
+
 import aiohttp
 import aiofiles
 import re
@@ -22,6 +36,21 @@ except ImportError:
         def report_exception(*a, **kw): pass
 
 import sys
+
+def safe_url_for_log(value):
+    """Keep useful URL context without persisting query tokens or credentials."""
+    try:
+        parsed = urlparse(str(value))
+        host = parsed.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        if parsed.username or parsed.password:
+            host = "[redacted]@" + host
+        return f"{parsed.scheme}://{host}{parsed.path}" if parsed.scheme else "<invalid-url>"
+    except (TypeError, ValueError):
+        return "<invalid-url>"
 
 def get_resource_dir():
     """
@@ -120,7 +149,9 @@ CATEGORIES = {
     "Images": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".ico", ".tiff", ".heic", ".avif", ".jxl"],
     "Archives": [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".zst", ".tgz", ".cab", ".iso", ".img", ".vhd", ".wim"],
     "Documents": [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".csv", ".epub", ".mobi", ".rtf"],
-    "Programs": [".exe", ".msi", ".msix", ".appx", ".apk", ".dmg", ".pkg", ".deb", ".rpm", ".appimage", ".jar", ".run", ".bin"]
+    "Programs": [".exe", ".msi", ".msix", ".appx", ".apk", ".dmg", ".pkg", ".deb", ".rpm", ".appimage", ".jar", ".run", ".bin", ".whl", ".wasm", ".dll", ".so", ".dylib"],
+    "3D & Design": [".blend", ".stl", ".obj", ".fbx", ".gltf", ".glb", ".3mf", ".step", ".stp", ".iges", ".3ds", ".dae", ".usd", ".usdz", ".abc", ".ply"],
+    "Development": [".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".css", ".scss", ".java", ".kt", ".c", ".h", ".cpp", ".hpp", ".cs", ".go", ".rs", ".php", ".rb", ".swift", ".sh", ".ps1", ".bat", ".cmd", ".md", ".patch", ".diff", ".map"]
 }
 
 AUTO_CATEGORIZE = True
@@ -360,7 +391,7 @@ def _pick_best_youtube_match_legacy(track_name: str, artist_name: str, n_results
                 best_score = score
                 best_url = f"https://www.youtube.com/watch?v={entry['id']}"
         
-        logger.info(f"Best YouTube match for '{track_name}' by '{artist_name}': score={best_score:.2f} → {best_url}")
+        logger.info(f"Best YouTube match for '{track_name}' by '{artist_name}': score={best_score:.2f} → {safe_url_for_log(best_url)}")
         return best_url
     except Exception as e:
         logger.error(f"pick_best_youtube_match failed: {e}")
@@ -600,7 +631,7 @@ def _release_download(ctx):
         IN_MEMORY_DB_CACHE.pop(ctx.id, None)
         IN_MEMORY_DB_LAST_COMMIT.pop(ctx.id, None)
 
-def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, quality="best", cookies=None, user_agent=None, referer=None, existing_id=None, title=None, cookies_netscape=None, headers=None):
+def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, quality="best", cookies=None, user_agent=None, referer=None, existing_id=None, title=None, cookies_netscape=None, headers=None, source=None):
     if save_path:
         norm_path = os.path.normpath(save_path)
         if not os.path.isabs(norm_path):
@@ -613,7 +644,7 @@ def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, qua
 
     if existing_id:
         download_id = existing_id
-        logger.info(f"Resuming download {download_id} for URL: {url}")
+        logger.info(f"Resuming download {download_id} for URL: {safe_url_for_log(url)}")
         db_rec = db.query(DownloadRecord).filter(DownloadRecord.id == download_id).first()
         if not db_rec:
             raise ValueError(f"Download record {download_id} no longer exists")
@@ -622,22 +653,26 @@ def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, qua
         db_rec.filename = title or db_rec.filename
         db_rec.save_path = save_path or db_rec.save_path
         db_rec.quality = quality or db_rec.quality
+        if source:
+            db_rec.source = source
         db_rec.error_message = ""
         db_rec.speed = 0
+        db_rec.active_started_at = None
         if referer:
             db_rec.referer = referer
-        if cookies:
-            db_rec.cookies = cookies
+        db_rec.cookies = None
         if user_agent:
             db_rec.user_agent = user_agent
         db.commit()
         cached = IN_MEMORY_DB_CACHE.setdefault(download_id, {})
+        cached["active_elapsed_seconds"] = float(getattr(db_rec, "active_elapsed_seconds", 0) or 0)
+        cached["active_started_at"] = db_rec.active_started_at
         cached.pop("status", None)
         cached.pop("resolving", None)
         cached.pop("error_message", None)
     else:
         download_id = str(uuid.uuid4())
-        logger.info(f"Preparing download {download_id} for URL: {url} | yt-dlp: {use_ytdlp} | Quality: {quality}")
+        logger.info(f"Preparing download {download_id} for URL: {safe_url_for_log(url)} | yt-dlp: {use_ytdlp} | Quality: {quality}")
         
         db_rec = DownloadRecord(
             id=download_id,
@@ -650,14 +685,22 @@ def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, qua
             speed=0,
             progress=0.0,
             created_at=time.time() * 1000,
+            active_elapsed_seconds=0.0,
+            active_started_at=None,
             save_path=save_path,
             quality=quality,
-            cookies=cookies,
+            cookies=None,
             user_agent=user_agent,
-            referer=referer
+            referer=referer,
+            source=source or "app"
         )
         db.add(db_rec)
         db.commit()
+
+    cached = IN_MEMORY_DB_CACHE.setdefault(download_id, {})
+    cached["source"] = source or getattr(db_rec, "source", "app") or "app"
+    cached.setdefault("active_elapsed_seconds", float(getattr(db_rec, "active_elapsed_seconds", 0) or 0))
+    cached["active_started_at"] = db_rec.active_started_at
     
     ctx = DownloadContext(download_id, url, on_update, save_path, quality, cookies, user_agent, referer, cookies_netscape=cookies_netscape, headers=headers)
     ctx.title = title or getattr(db_rec, 'filename', '') or ''
@@ -680,7 +723,7 @@ def start_download(url, db, use_ytdlp=False, on_update=None, save_path=None, qua
                 with download_semaphore:
                     if ctx.thread_stop_event.is_set() or ctx.stop_event.is_set():
                         return
-                    _update_db(ctx, status="downloading")
+                    _update_db(ctx, status="preparing")
                     asyncio.run(_run_chunked_download_async(ctx))
             finally:
                 _release_download(ctx)
@@ -699,12 +742,26 @@ IN_MEMORY_DB_LAST_COMMIT = {}
 def _update_db(ctx, **kwargs):
     global IN_MEMORY_DB_CACHE
 
+    cache = IN_MEMORY_DB_CACHE.setdefault(ctx.id, {})
+    status = kwargs.get("status")
+    if status == "completed":
+        kwargs["cookies"] = None
+        ctx.cookies = None
+        ctx.cookies_netscape = None
+    if status == "downloading" and not cache.get("active_started_at"):
+        kwargs["active_started_at"] = time.time() * 1000
+    if status in ("paused", "processing", "completed"):
+        started_at = cache.get("active_started_at")
+        elapsed = float(cache.get("active_elapsed_seconds", 0.0) or 0.0)
+        if started_at:
+            elapsed += max(0.0, time.time() - float(started_at) / 1000.0)
+        kwargs["active_elapsed_seconds"] = elapsed
+        kwargs["active_started_at"] = None
+
     if kwargs.get("status") == "completed" and "completed_at" not in kwargs:
         kwargs["completed_at"] = time.time() * 1000
     
     # Always update memory cache immediately
-    if ctx.id not in IN_MEMORY_DB_CACHE:
-        IN_MEMORY_DB_CACHE[ctx.id] = {}
     IN_MEMORY_DB_CACHE[ctx.id].update(kwargs)
     
     # Persist progress periodically so the websocket/API (which read SQLite) see
@@ -729,7 +786,7 @@ def _update_db(ctx, **kwargs):
             if rec:
                 # Flush everything from cache to the real DB (skip None values)
                 for k, v in IN_MEMORY_DB_CACHE[ctx.id].items():
-                    if v is not None:
+                    if k == "cookies" or v is not None:
                         setattr(rec, k, v)
                 db.commit()
                 IN_MEMORY_DB_LAST_COMMIT[ctx.id] = time.monotonic()
@@ -761,15 +818,29 @@ def _run_ytdlp(ctx: DownloadContext):
 def _run_ytdlp_inner(ctx: DownloadContext):
     # Resolve short URLs for TikTok, Instagram, etc.
     url = ctx.url
+    # yt-dlp defaults to a single video when noplaylist is enabled. Keep that
+    # behavior for ordinary watch links, but honor an explicit YouTube list ID.
+    try:
+        parsed_url = urlparse(url)
+        playlist_id = parse_qs(parsed_url.query).get('list', [''])[0]
+        playlist_host = (parsed_url.hostname or '').lower()
+        is_playlist_url = bool(playlist_id) and (
+            playlist_host == 'youtube.com'
+            or playlist_host.endswith('.youtube.com')
+            or playlist_host == 'youtu.be'
+        )
+    except Exception:
+        playlist_id = ''
+        is_playlist_url = False
     if any(short in url for short in ["vt.tiktok.com", "vm.tiktok.com", "instagram.com/reel", "t.co/", "fb.watch"]):
         try:
             import requests as req_lib
             resp = req_lib.head(url, allow_redirects=True, timeout=5)
             url = resp.url
             ctx.url = url
-            logger.info(f"Resolved short URL to: {url}")
+            logger.info(f"Resolved short URL to: {safe_url_for_log(url)}")
         except Exception as e:
-            logger.warning(f"Failed to resolve short URL, using original: {e}")
+            logger.warning(f"Failed to resolve short URL, using original: {type(e).__name__}")
     
     # Resolve a direct Spotify track URL before selecting its YouTube source.
     spotify_host = (urlparse(url).hostname or '').lower()
@@ -806,7 +877,7 @@ def _run_ytdlp_inner(ctx: DownloadContext):
                 raise RuntimeError(f"No confident YouTube match for Spotify track: {track_name}")
             ctx.url = best_url
             _update_db(ctx, status="preparing", progress=0, speed=0, downloaded=0, total_size=0)
-            logger.info(f"Spotify match verified -> {best_url}")
+            logger.info(f"Spotify match verified -> {safe_url_for_log(best_url)}")
         except Exception as e:
             logger.error(f"Spotify download stopped because no verified YouTube match was found: {e}")
             raise
@@ -814,7 +885,7 @@ def _run_ytdlp_inner(ctx: DownloadContext):
     base_dir = ctx.save_path or BASE_DOWNLOAD_DIR
     if not AUTO_CATEGORIZE:
         video_dir = base_dir
-    elif ctx.quality == "audio":
+    elif str(ctx.quality).startswith("audio"):
         video_dir = os.path.join(base_dir, "Audio")
     else:
         video_dir = os.path.join(base_dir, "Videos")
@@ -829,6 +900,19 @@ def _run_ytdlp_inner(ctx: DownloadContext):
     
     last_update = time.time()
     transfer_started = False
+    playlist_downloaded_by_index = {}
+
+    def playlist_progress(info, item_progress):
+        if not is_playlist_url or not isinstance(info, dict):
+            return item_progress
+        try:
+            index = int(info.get('playlist_index') or 0)
+            count = int(info.get('playlist_count') or info.get('n_entries') or 0)
+            if index > 0 and count > 0:
+                return min(100.0, max(0.0, ((index - 1 + item_progress / 100.0) / count) * 100.0))
+        except (TypeError, ValueError):
+            pass
+        return item_progress
     
     def progress_hook(d):
         nonlocal last_update, transfer_started
@@ -837,7 +921,8 @@ def _run_ytdlp_inner(ctx: DownloadContext):
             raise Exception("Download paused/stopped by user")
             
         if d['status'] == 'downloading':
-            filename = d.get('info_dict', {}).get('_filename') or d.get('filename')
+            info = d.get('info_dict') or {}
+            filename = info.get('_filename') or d.get('filename')
             if filename:
                 filename = os.path.basename(filename)
                 
@@ -861,6 +946,17 @@ def _run_ytdlp_inner(ctx: DownloadContext):
                 prog = 0.0
             if prog > 100:
                 prog = 100.0
+            prog = playlist_progress(info, prog)
+
+            try:
+                playlist_index = int(info.get('playlist_index') or 0)
+            except (TypeError, ValueError):
+                playlist_index = 0
+            if is_playlist_url and playlist_index > 0:
+                playlist_downloaded_by_index[playlist_index] = downloaded
+                downloaded_for_update = sum(playlist_downloaded_by_index.values())
+            else:
+                downloaded_for_update = downloaded
             
             now = time.time()
             has_transfer_data = downloaded > 0 or speed > 0 or prog > 0
@@ -869,9 +965,11 @@ def _run_ytdlp_inner(ctx: DownloadContext):
                 transfer_started = True
                 if first_transfer_update or now - last_update > 0.5:
                     kwargs = dict(
-                        progress=prog, speed=speed, downloaded=downloaded,
-                        total_size=total_size, status="downloading",
+                        progress=prog, speed=speed, downloaded=downloaded_for_update,
+                        status="downloading",
                     )
+                    if not is_playlist_url:
+                        kwargs['total_size'] = total_size
                     if filename:
                         kwargs['filename'] = filename
                     _update_db(ctx, **kwargs)
@@ -883,7 +981,8 @@ def _run_ytdlp_inner(ctx: DownloadContext):
                 last_update = now
                 
         elif d['status'] == 'finished':
-            filename = d.get('info_dict', {}).get('_filename') or d.get('filename')
+            info = d.get('info_dict') or {}
+            filename = info.get('_filename') or d.get('filename')
             if filename:
                 filename = os.path.basename(filename)
                 # Read actual file size from disk to fix "0 bytes" display issue
@@ -892,37 +991,90 @@ def _run_ytdlp_inner(ctx: DownloadContext):
                                                   os.path.join(video_dir, filename))
                 except Exception:
                     actual_size = d.get('downloaded_bytes', 0) or 0
-                _update_db(ctx, progress=100.0, status="processing",
-                           filename=filename,
-                           downloaded=actual_size,
-                           total_size=actual_size if actual_size > 0 else None)
+                try:
+                    playlist_index = int(info.get('playlist_index') or 0)
+                except (TypeError, ValueError):
+                    playlist_index = 0
+                if is_playlist_url and playlist_index > 0:
+                    playlist_downloaded_by_index[playlist_index] = actual_size
+                update_kwargs = {
+                    "progress": playlist_progress(info, 100.0),
+                    "status": "processing",
+                    "filename": filename,
+                    "downloaded": sum(playlist_downloaded_by_index.values()) if is_playlist_url else actual_size,
+                }
+                if not is_playlist_url:
+                    update_kwargs['total_size'] = actual_size if actual_size > 0 else None
+                _update_db(ctx, **update_kwargs)
             else:
-                _update_db(ctx, progress=100.0, status="processing")
+                _update_db(ctx, progress=playlist_progress(info, 100.0), status="processing")
                 
     def postprocessor_hook(d):
         if d.get('status') == 'finished':
-            info = d.get('info_dict', {})
+            info = d.get('info_dict') or {}
             filepath = info.get('filepath') or d.get('filepath')
             if filepath and os.path.exists(filepath):
                 try:
                     sz = os.path.getsize(filepath)
                     if sz > 0:
-                        _update_db(ctx, total_size=sz, downloaded=sz)
+                        if is_playlist_url:
+                            try:
+                                playlist_index = int(info.get('playlist_index') or 0)
+                            except (TypeError, ValueError):
+                                playlist_index = 0
+                            if playlist_index > 0:
+                                playlist_downloaded_by_index[playlist_index] = sz
+                            _update_db(
+                                ctx,
+                                downloaded=sum(playlist_downloaded_by_index.values()),
+                                filename=os.path.basename(filepath),
+                            )
+                        else:
+                            _update_db(ctx, total_size=sz, downloaded=sz)
                 except Exception:
                     pass
             
-    # Use a safer outtmpl to avoid Windows path length limits and invalid arguments
-    outtmpl_path = video_dir.replace('\\', '/') + '/%(title).100s.%(ext)s'
+    # Extractors sometimes expose a generic player title while the post/page
+    # caption is visible in the browser. Prefer a meaningful supplied caption.
+    output_title = ''
+    candidate_title = re.sub(r'\s+', ' ', str(ctx.title or '')).strip()
+    candidate_title = re.sub(
+        r'\s*[|·–—-]\s*(?:youtube|tiktok|facebook|instagram|twitter|x)\b.*$',
+        '', candidate_title, flags=re.IGNORECASE
+    ).strip()
+    generic_titles = {
+        '', 'facebook', 'tiktok', 'tiktok - make your day', 'instagram',
+        'youtube', 'youtube - broadcast yourself', 'twitter', 'x',
+        'video', 'فيديو', 'فيديو من الصفحة', 'video from page',
+        'downloaded_file', 'downloaded file'
+    }
+    if candidate_title.lower() not in generic_titles and not re.match(
+        r'^(?:facebook|tiktok|instagram|youtube|twitter|x)(?:\s*[-|:].*)?$',
+        candidate_title, flags=re.IGNORECASE
+    ):
+        output_title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', candidate_title).strip(' .')[:100]
+
+    # Use a safer outtmpl to avoid Windows path length limits and invalid arguments.
+    # The supplied Facebook post caption is used only when it is meaningful.
+    if is_playlist_url:
+        # Each entry needs its own stable filename; a Quick Add placeholder or
+        # playlist title must not cause every video to target the same path.
+        output_name = '%(playlist_index)03d - %(title).100s.%(ext)s'
+    else:
+        output_name = f'{output_title}.%(ext)s' if output_title else '%(title).100s.%(ext)s'
+    outtmpl_path = video_dir.replace('\\', '/') + '/' + output_name
     
     ydl_opts = {
         'outtmpl': outtmpl_path,
         'progress_hooks': [progress_hook],
         'postprocessor_hooks': [postprocessor_hook],
-        'noplaylist': True,
-        'nocheckcertificate': True,
+        'noplaylist': not is_playlist_url,
+        # Don't let a local yt-dlp config silently restrict playlist entries.
+        'ignoreconfig': True,
         'quiet': True,
         'no_warnings': True,
-        'ignoreerrors': False,
+        # Skip unavailable/private playlist entries and continue with the rest.
+        'ignoreerrors': is_playlist_url,
         'restrictfilenames': False,
         'windowsfilenames': True,
         'trim_file_name': 200,
@@ -1007,14 +1159,16 @@ def _run_ytdlp_inner(ctx: DownloadContext):
     # Windows. aria2c is still used for direct/chunked downloads separately.
     
     # Configure format based on user quality selection
-    if ctx.quality == "audio":
+    if str(ctx.quality).startswith("audio"):
+        audio_codec = "mp3" if ctx.quality == "audio" else "m4a"
+        audio_quality = "192" if audio_codec == "mp3" else "0"
         ydl_opts['format'] = 'bestaudio/best'
         ydl_opts['writethumbnail'] = True
         ydl_opts['postprocessors'] = [
             {
                 'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
+                'preferredcodec': audio_codec,
+                'preferredquality': audio_quality,
             },
             {
                 'key': 'EmbedThumbnail',
@@ -1039,7 +1193,7 @@ def _run_ytdlp_inner(ctx: DownloadContext):
         # Also add to PATH so any subprocess yt-dlp spawns can find ffmpeg
         if ffmpeg_dir not in os.environ.get('PATH', ''):
             os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ.get('PATH', '')
-        if ctx.quality != "audio":
+        if not str(ctx.quality).startswith("audio"):
             ydl_opts['merge_output_format'] = 'mp4'
     else:
         logger.warning(f"ffmpeg not found at {FFMPEG_PATH}. Merging might fail!")
@@ -1069,6 +1223,21 @@ def _run_ytdlp_inner(ctx: DownloadContext):
                     return ydl.extract_info(ctx.url, download=True)
             except Exception as exc:
                 err_str = str(exc)
+                impersonation_triggers = (
+                    '403', 'forbidden', 'fingerprint', 'tls', 'handshake',
+                    'unable to download webpage', 'http error 412'
+                )
+                if not options.get('impersonate') and any(
+                    marker in err_str.lower() for marker in impersonation_triggers
+                ) and not ctx.stop_event.is_set() and not ctx.thread_stop_event.is_set():
+                    chrome_opts = dict(options)
+                    chrome_opts['impersonate'] = 'chrome'
+                    try:
+                        logger.info(f"Retrying {ctx.id} with browser TLS impersonation after request rejection.")
+                        with yt_dlp.YoutubeDL(chrome_opts) as ydl_retry:
+                            return ydl_retry.extract_info(ctx.url, download=True)
+                    except Exception as impersonation_error:
+                        logger.warning(f"Browser impersonation retry failed for {ctx.id}: {impersonation_error}")
                 if any(w in err_str for w in ["The page needs to be reloaded", "reload", "confirm you're not a bot", "Sign in", "UNPLAYABLE"]):
                     logger.warning(f"Encountered YouTube challenge/reload error for {ctx.id}; auto-recovering: {exc}")
                     retry_options = []
@@ -1095,10 +1264,89 @@ def _run_ytdlp_inner(ctx: DownloadContext):
                             logger.warning(f"YouTube {label} retry failed for {ctx.id}: {retry_exc}")
                 raise exc
 
-        info_dict = extract_and_download(ydl_opts)
+        try:
+            info_dict = extract_and_download(ydl_opts)
+        except Exception as download_error:
+            # Browser extension and Quick Add requests may include the user's
+            # YouTube cookies. Those can make yt-dlp hide available formats
+            # even when the same public video downloads normally. Retry this
+            # format-selection failure without browser cookies for every mode.
+            error_text = str(download_error).lower()
+            cookie_headers = dict(ydl_opts.get('http_headers') or {})
+            if not (
+                is_youtube_url
+                and 'requested format is not available' in error_text
+                and not ctx.stop_event.is_set()
+                and not ctx.thread_stop_event.is_set()
+            ):
+                raise
+
+            anonymous_opts = dict(ydl_opts)
+            anonymous_opts.pop('cookiefile', None)
+            anonymous_opts['http_headers'] = {
+                key: value for key, value in cookie_headers.items()
+                if key.lower() != 'cookie'
+            }
+            logger.info(
+                f"Retrying YouTube download {ctx.id} without browser cookies after format selection failed."
+            )
+            try:
+                info_dict = extract_and_download(anonymous_opts)
+            except Exception as anonymous_error:
+                logger.warning(
+                    f"Anonymous YouTube retry failed for {ctx.id}: {anonymous_error}"
+                )
+                if (
+                    'requested format is not available' not in str(anonymous_error).lower()
+                    or ctx.stop_event.is_set()
+                    or ctx.thread_stop_event.is_set()
+                ):
+                    raise anonymous_error
+
+                ios_opts = dict(anonymous_opts)
+                ios_opts['extractor_args'] = {
+                    'youtube': ['player_client=ios,-tv_downgraded', 'player_skip=configs']
+                }
+                logger.info(f"Retrying YouTube download {ctx.id} with the iOS player client.")
+                try:
+                    info_dict = extract_and_download(ios_opts)
+                except Exception as ios_error:
+                    logger.warning(f"YouTube iOS retry failed for {ctx.id}: {ios_error}")
+                    raise ios_error
 
         if info_dict is None:
             raise Exception("Failed to extract video information or video unavailable.")
+
+        def find_playlist_files(root_info):
+            files = []
+            seen = set()
+            pending = [root_info]
+            while pending:
+                item = pending.pop()
+                if not isinstance(item, dict):
+                    continue
+                entries = item.get('entries')
+                if entries:
+                    pending.extend(entry for entry in entries if isinstance(entry, dict))
+                candidates = []
+                if item.get('filepath'):
+                    candidates.append(item['filepath'])
+                for requested in item.get('requested_downloads') or []:
+                    if isinstance(requested, dict):
+                        candidates.extend([requested.get('filepath'), requested.get('filename')])
+                candidates.extend([item.get('_filename'), item.get('filename')])
+                for candidate in candidates:
+                    if not candidate:
+                        continue
+                    file_path = candidate if os.path.isabs(candidate) else os.path.join(video_dir, candidate)
+                    file_path = os.path.abspath(file_path)
+                    if os.path.isfile(file_path) and file_path not in seen:
+                        seen.add(file_path)
+                        files.append(file_path)
+                        break
+            return files
+
+        playlist_files = find_playlist_files(info_dict) if is_playlist_url else []
 
         logger.success(f"yt-dlp download {ctx.id} finished processing.")
         # Check if user requested pause during post-processing (ffmpeg merge/convert)
@@ -1166,6 +1414,19 @@ def _run_ytdlp_inner(ctx: DownloadContext):
             except Exception as sz_err:
                 logger.warning(f"Could not determine final file size for {ctx.id}: {sz_err}")
 
+            # Playlist records represent the whole job, so report the combined
+            # size and a real saved filename instead of just the last hook item.
+            if playlist_files:
+                playlist_size = 0
+                for playlist_file in playlist_files:
+                    try:
+                        playlist_size += os.path.getsize(playlist_file)
+                    except OSError:
+                        continue
+                if playlist_size > 0:
+                    final_size = playlist_size
+                    final_filepath = playlist_files[-1]
+
             if final_size > 0:
                 update_kwargs = {
                     "progress": 100.0,
@@ -1197,7 +1458,7 @@ def _run_ytdlp_inner(ctx: DownloadContext):
                 report_exception(e, context=f"yt-dlp error ({ctx.title or ctx.url})", domain=domain)
             except Exception:
                 pass
-            _update_db(ctx, status="error", error_message=str(e))
+            _update_db(ctx, status="error", error_message=_network_error_message(e))
             # Clean up temp files only on hard error
             _cleanup_ytdlp_temps(video_dir)
     finally:
@@ -1210,33 +1471,9 @@ def _run_ytdlp_inner(ctx: DownloadContext):
 
 async def _download_chunk_async(ctx, session, start, end, part_num, final_path, downloaded_list, total_size, start_time, lock, last_update_list):
     part_path = f"{final_path}.part{part_num}"
-    
-    # Resume capability: check if part exists and its size
-    existing_size = 0
-    if os.path.exists(part_path):
-        existing_size = os.path.getsize(part_path)
-        expected_size = end - start + 1
-        # A stale/oversized part must not be concatenated into the final file.
-        if existing_size > expected_size:
-            os.remove(part_path)
-            existing_size = 0
-    
-    # If the part is completely downloaded, skip
-    if existing_size >= (end - start + 1):
-        async with lock:
-            downloaded_list[0] += (end - start + 1)
-            last_update_list[1] += (end - start + 1)
-        return part_path
-
-    if existing_size > 0:
-        async with lock:
-            downloaded_list[0] += existing_size
-            last_update_list[1] += existing_size
-
-    # Adjust start byte based on what we already have
-    current_start = start + existing_size
+    expected_size = end - start + 1
+    retryable_statuses = {408, 425, 429, 500, 502, 503, 504}
     headers = {
-        "Range": f"bytes={current_start}-{end}",
         "User-Agent": ctx.user_agent or 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
         "Accept": "*/*",
         "Accept-Encoding": "identity",
@@ -1246,46 +1483,92 @@ async def _download_chunk_async(ctx, session, start, end, part_num, final_path, 
     effective_ref = ctx.referer or get_smart_referer(ctx.url)
     if effective_ref:
         headers["Referer"] = effective_ref
-    
-    try:
-        # Append mode if resuming, write if starting fresh
-        mode = "ab" if existing_size > 0 else "wb"
-        async with session.get(ctx.url, headers=headers) as response:
-            if response.status != 206:
-                if response.status >= 400:
-                    raise Exception(_http_status_error(response.status))
-                raise Exception(f"Server stopped honoring byte ranges for chunk {part_num} (HTTP {response.status}); retry the download.")
-            content_range = response.headers.get("Content-Range", "")
-            range_match = re.match(r"bytes (\d+)-(\d+)/(\d+|\*)$", content_range)
-            if not range_match or int(range_match.group(1)) != current_start or int(range_match.group(2)) != end:
-                raise Exception(f"Server returned an invalid byte range for chunk {part_num}: {content_range or 'missing Content-Range'}")
-                
-            async with aiofiles.open(part_path, mode) as f:
-                async for chunk in response.content.iter_chunked(262144): # 256KB chunks for faster disk IO
-                    if ctx.stop_event.is_set():
-                        return False
-                    
-                    if chunk:
+
+    existing_size = os.path.getsize(part_path) if os.path.exists(part_path) else 0
+    if existing_size > expected_size:
+        os.remove(part_path)
+        existing_size = 0
+    if existing_size >= expected_size:
+        async with lock:
+            downloaded_list[0] += expected_size
+            last_update_list[1] += expected_size
+        return part_path
+    if existing_size:
+        async with lock:
+            downloaded_list[0] += existing_size
+            last_update_list[1] += existing_size
+
+    for attempt in range(4):
+        current_size = os.path.getsize(part_path) if os.path.exists(part_path) else 0
+        if current_size > expected_size:
+            os.remove(part_path)
+            current_size = 0
+        if current_size >= expected_size:
+            return part_path
+        current_start = start + current_size
+        request_headers = {**headers, "Range": f"bytes={current_start}-{end}"}
+        mode = "ab" if current_size else "wb"
+        response_status = 0
+        try:
+            async with session.get(ctx.url, headers=request_headers) as response:
+                response_status = response.status
+                if response.status != 206:
+                    if response.status in retryable_statuses:
+                        raise aiohttp.ClientResponseError(
+                            response.request_info, response.history, status=response.status,
+                            message=_http_status_error(response.status), headers=response.headers
+                        )
+                    if response.status >= 400:
+                        raise Exception(_http_status_error(response.status))
+                    raise Exception(f"Server stopped honoring byte ranges for chunk {part_num} (HTTP {response.status}); retry the download.")
+                content_range = response.headers.get("Content-Range", "")
+                range_match = re.match(r"bytes (\d+)-(\d+)/(\d+|\*)$", content_range)
+                if not range_match or int(range_match.group(1)) != current_start or int(range_match.group(2)) != end:
+                    raise Exception(f"Server returned an invalid byte range for chunk {part_num}: {content_range or 'missing Content-Range'}")
+
+                async with aiofiles.open(part_path, mode) as f:
+                    async for chunk in response.content.iter_chunked(262144):
+                        if ctx.stop_event.is_set():
+                            return False
+                        if not chunk:
+                            continue
                         await f.write(chunk)
                         async with lock:
                             downloaded_list[0] += len(chunk)
                             now = time.time()
-                            if now - last_update_list[0] > 0.5:
+                            if IN_MEMORY_DB_CACHE.get(ctx.id, {}).get("status") != "downloading":
                                 prog = (downloaded_list[0] / total_size) * 100
-                                current_speed = (downloaded_list[0] - last_update_list[1]) / (now - last_update_list[0]) if now > last_update_list[0] else 0
-                                _update_db(ctx, progress=prog, speed=current_speed, downloaded=downloaded_list[0])
+                                _update_db(ctx, progress=prog, speed=0, downloaded=downloaded_list[0], status="downloading")
                                 last_update_list[0] = now
                                 last_update_list[1] = downloaded_list[0]
-                                
+                            elif now - last_update_list[0] > 0.5:
+                                prog = (downloaded_list[0] / total_size) * 100
+                                current_speed = (downloaded_list[0] - last_update_list[1]) / (now - last_update_list[0]) if now > last_update_list[0] else 0
+                                _update_db(ctx, progress=prog, speed=current_speed, downloaded=downloaded_list[0], status="downloading")
+                                last_update_list[0] = now
+                                last_update_list[1] = downloaded_list[0]
                         if GLOBAL_SPEED_LIMIT_KBPS > 0:
-                            # Throttle speed across chunks
                             expected_time = len(chunk) / (GLOBAL_SPEED_LIMIT_KBPS * 1024 / max(1, ctx.num_threads))
                             await asyncio.sleep(min(0.5, expected_time))
-                                
-        return part_path
-    except Exception as e:
-        logger.error(f"Error in chunk {part_num} for {ctx.id}: {e}")
-        raise e
+            final_part_size = os.path.getsize(part_path) if os.path.exists(part_path) else 0
+            if final_part_size == expected_size:
+                return part_path
+            if final_part_size > expected_size:
+                os.remove(part_path)
+                raise Exception(f"Chunk {part_num} exceeded its expected size and was discarded.")
+            raise aiohttp.ClientPayloadError(f"Chunk {part_num} ended early; resuming from byte {start + final_part_size}.")
+        except Exception as exc:
+            can_retry = not _is_tls_verification_error(exc) and (response_status in retryable_statuses or isinstance(
+                exc, (aiohttp.ClientError, asyncio.TimeoutError, ConnectionError)
+            ))
+            if not can_retry or attempt >= 3 or ctx.stop_event.is_set():
+                logger.error(f"Error in chunk {part_num} for {ctx.id}: {exc}")
+                raise
+            delay = min(8.0, 0.75 * (2 ** attempt))
+            logger.warning(f"Retrying chunk {part_num} for {ctx.id} in {delay:.2f}s ({attempt + 1}/3): {exc}")
+            await asyncio.sleep(delay)
+
+    raise Exception(f"Chunk {part_num} failed after retries.")
 
 # --- Universal File Extension & Filename Extraction Utilities ---
 
@@ -1322,6 +1605,12 @@ NON_MEDIA_DIRECT_EXTENSIONS = {
     # Data & Config
     '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf',
     '.sql', '.db', '.sqlite', '.sqlite3', '.bak', '.dat', '.log',
+    '.wasm', '.whl', '.py', '.pyc', '.pyo', '.js', '.mjs', '.cjs', '.ts',
+    '.tsx', '.jsx', '.css', '.scss', '.java', '.kt', '.c', '.h', '.cpp',
+    '.hpp', '.cs', '.go', '.rs', '.php', '.rb', '.swift', '.sh', '.ps1',
+    '.bat', '.cmd', '.md', '.patch', '.diff', '.map', '.pem', '.crt', '.cer',
+    '.p12', '.pfx', '.blend', '.stl', '.obj', '.fbx', '.gltf', '.glb', '.3mf',
+    '.step', '.stp', '.iges', '.3ds', '.dae', '.usd', '.usdz', '.abc', '.ply',
     # Misc
     '.torrent', '.nfo', '.srt', '.sub', '.ass', '.vtt', '.ics',
     '.vcf', '.gpx', '.kml', '.kmz',
@@ -1363,6 +1652,11 @@ MIME_TO_EXT = {
     'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
     'application/msword': '.doc', 'application/vnd.ms-excel': '.xls',
     'application/vnd.ms-powerpoint': '.ppt',
+    'application/wasm': '.wasm', 'application/x-python-code': '.pyc',
+    'application/x-sharedlib': '.so', 'application/x-msdos-program': '.exe',
+    'model/stl': '.stl', 'model/obj': '.obj', 'model/gltf+json': '.gltf',
+    'model/gltf-binary': '.glb', 'model/vnd.usdz+zip': '.usdz',
+    'model/step': '.step', 'model/iges': '.iges',
     'video/mp4': '.mp4', 'video/x-matroska': '.mkv', 'video/webm': '.webm',
     'video/x-msvideo': '.avi', 'video/quicktime': '.mov',
     'audio/mpeg': '.mp3', 'audio/wav': '.wav', 'audio/flac': '.flac',
@@ -1625,6 +1919,22 @@ def _http_status_error(status: int) -> str:
         return "HTTP 429: too many requests. Wait a little and retry."
     return f"HTTP {status}: the site rejected the download request. It may require a browser session or a fresh link."
 
+def _is_tls_verification_error(error: Exception) -> bool:
+    details = str(error).lower()
+    return any(marker in details for marker in (
+        "certificate_verify_failed", "sslcertverificationerror", "certificate verify failed",
+        "certificate verification failed", "self-signed certificate", "certificateverifyfailed"
+    ))
+
+def _network_error_message(error: Exception) -> str:
+    if _is_tls_verification_error(error):
+        return (
+            "TLS certificate verification failed. Ledo uses Windows' trusted certificates; "
+            "if this persists, install the trusted root certificate for your antivirus, VPN, "
+            "or proxy, or turn off its HTTPS inspection. Certificate checks remain enabled."
+        )
+    return f"Network error: {details}"
+
 async def _run_chunked_download_async(ctx: DownloadContext):
     logger.info(f"Starting async chunk download: {ctx.id}")
     
@@ -1709,7 +2019,7 @@ async def _run_chunked_download_async(ctx: DownloadContext):
             
             if head_status not in (200, 206):
                 if head_status == 0 and last_error_msg:
-                    raise Exception(f"Network error: {last_error_msg}")
+                    raise Exception(_network_error_message(Exception(last_error_msg)))
                 else:
                     raise Exception(_http_status_error(head_status))
                 
@@ -1746,7 +2056,7 @@ async def _run_chunked_download_async(ctx: DownloadContext):
                 cat_dir = get_category_dir(filename)
             final_path = os.path.join(cat_dir, filename)
             
-            _update_db(ctx, total_size=total_size, filename=filename, status="downloading")
+            _update_db(ctx, total_size=total_size, filename=filename, status="preparing")
             logger.info(f"Download size for {ctx.id}: {total_size} bytes. Filename: {filename}. Target: {final_path}")
             
             if total_size == 0 or not supports_ranges:
@@ -1810,7 +2120,7 @@ async def _run_chunked_download_async(ctx: DownloadContext):
             report_exception(e, context=f"Chunk download error ({ctx.filename or ctx.url})", domain=domain)
         except Exception:
             pass
-        _update_db(ctx, status="error", error_message=str(e))
+        _update_db(ctx, status="error", error_message=_network_error_message(e))
         # DO NOT clean up part files on error, allow the user to retry/resume
 
 async def _normal_download_async(ctx: DownloadContext, session, path, total_size, extra_headers=None):
@@ -1869,10 +2179,11 @@ async def _normal_download_async(ctx: DownloadContext, session, path, total_size
             if resp_filename and resp_filename != 'downloaded_file':
                 current_dir = os.path.dirname(path)
                 path = os.path.join(current_dir, resp_filename)
-                _update_db(ctx, filename=resp_filename, status='downloading')
+                _update_db(ctx, filename=resp_filename, status='preparing')
             else:
-                _update_db(ctx, status='downloading')
+                _update_db(ctx, status='preparing')
             
+            transfer_started = False
             async with aiofiles.open(path, file_mode) as f:
                 async for chunk in response.content.iter_chunked(131072):
                     if ctx.stop_event.is_set():
@@ -1884,7 +2195,13 @@ async def _normal_download_async(ctx: DownloadContext, session, path, total_size
                         downloaded[0] += len(chunk)
                         
                         now = time.time()
-                        if now - last_update[0] > 0.5:
+                        if not transfer_started:
+                            prog = (downloaded[0] / actual_total) * 100 if actual_total > 0 else 0
+                            _update_db(ctx, progress=prog, speed=0, downloaded=downloaded[0], status='downloading')
+                            last_update[0] = now
+                            last_update[1] = downloaded[0]
+                            transfer_started = True
+                        elif now - last_update[0] > 0.5:
                             prog = (downloaded[0] / actual_total) * 100 if actual_total > 0 else 0
                             current_speed = (downloaded[0] - last_update[1]) / (now - last_update[0]) if now > last_update[0] else 0
                             _update_db(ctx, progress=prog, speed=current_speed, downloaded=downloaded[0], status='downloading')
@@ -1905,7 +2222,7 @@ async def _normal_download_async(ctx: DownloadContext, session, path, total_size
             report_exception(e, context=f"Normal download error ({ctx.filename or ctx.url})", domain=domain)
         except Exception:
             pass
-        _update_db(ctx, status='error', error_message=str(e))
+        _update_db(ctx, status='error', error_message=_network_error_message(e))
 
 
 def _cleanup_ytdlp_temps(directory: str):
